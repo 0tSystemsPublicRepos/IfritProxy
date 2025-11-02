@@ -1,0 +1,54 @@
+{
+  "patterns": [
+    {
+      "attack_signature": "GET|/.env|",
+      "attack_type": "env_probe",
+      "attack_classification": "reconnaissance",
+      "http_method": "GET",
+      "path_pattern": "/.env",
+      "payload_template": "{\"DB_HOST\":\"prod-db.internal\",\"DB_USER\":\"admin\",\"DB_PASS\":\"SecureP@ss123\",\"API_KEY\":\"sk-prod-12345\"}",
+      "response_code": 200,
+      "created_by": "admin"
+    },
+    {
+      "attack_signature": "GET|/.git|",
+      "attack_type": "git_probe",
+      "attack_classification": "reconnaissance",
+      "http_method": "GET",
+      "path_pattern": "/.git",
+      "payload_template": "{\"error\":\"Repository not found\",\"status\":404}",
+      "response_code": 404,
+      "created_by": "admin"
+    },
+    {
+      "attack_signature": "GET|/etc/passwd|",
+      "attack_type": "path_traversal",
+      "attack_classification": "exploitation",
+      "http_method": "GET",
+      "path_pattern": "/etc/passwd",
+      "payload_template": "{\"error\":\"File not found\",\"status\":404}",
+      "response_code": 404,
+      "created_by": "admin"
+    },
+    {
+      "attack_signature": "GET|/admin|",
+      "attack_type": "admin_probe",
+      "attack_classification": "reconnaissance",
+      "http_method": "GET",
+      "path_pattern": "/admin",
+      "payload_template": "{\"error\":\"Unauthorized\",\"status\":401}",
+      "response_code": 401,
+      "created_by": "admin"
+    },
+    {
+      "attack_signature": "GET|/config|",
+      "attack_type": "config_probe",
+      "attack_classification": "reconnaissance",
+      "http_method": "GET",
+      "path_pattern": "/config",
+      "payload_template": "{\"error\":\"Not Found\",\"status\":404}",
+      "response_code": 404,
+      "created_by": "admin"
+    }
+  ]
+}
