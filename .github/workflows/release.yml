@@ -1,0 +1,65 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+            goarch: amd64
+          - os: linux
+            arch: arm64
+            goarch: arm64
+          - os: darwin
+            arch: amd64
+            goarch: amd64
+          - os: darwin
+            arch: arm64
+            goarch: arm64
+          - os: windows
+            arch: amd64
+            goarch: amd64
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          if [ "${{ matrix.os }}" = "windows" ]; then
+            go build -o ifrit-${{ matrix.os }}-${{ matrix.arch }}.exe ./cmd/ifrit
+          else
+            go build -o ifrit-${{ matrix.os }}-${{ matrix.arch }} ./cmd/ifrit
+          fi
+
+      - name: Calculate SHA256
+        run: |
+          if [ "${{ matrix.os }}" = "windows" ]; then
+            sha256sum ifrit-${{ matrix.os }}-${{ matrix.arch }}.exe > ifrit-${{ matrix.os }}-${{ matrix.arch }}.exe.sha256
+          else
+            sha256sum ifrit-${{ matrix.os }}-${{ matrix.arch }} > ifrit-${{ matrix.os }}-${{ matrix.arch }}.sha256
+          fi
+
+      - name: Upload Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            ifrit-${{ matrix.os }}-${{ matrix.arch }}*
+            ifrit-${{ matrix.os }}-${{ matrix.arch }}.exe*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

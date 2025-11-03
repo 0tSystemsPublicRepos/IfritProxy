@@ -14,19 +14,19 @@
     "path": "./data/ifrit.db"
   },
   "llm": {
-    "primary": "claude",
+    "primary": "gpt",
     "claude": {
-      "api_key": "YOUR_CLAUDE_API_KEY_HERE",
-      "model": "claude-3-5-sonnet"
+      "api_key": "",
+      "model": "claude-3-5-haiku-20241022"
     },
     "gpt": {
-      "api_key": "YOUR_GPT_API_KEY_HERE",
-      "model": "gpt-4"
+      "api_key": "",
+      "model": "gpt-4o-mini"
     }
   },
   "detection": {
     "enable_local_rules": true,
-    "enable_llm": true,
+    "enable_llm": false,
     "llm_only_on": ["POST", "PUT", "DELETE"],
     "whitelist_ips": [],
     "whitelist_paths": []

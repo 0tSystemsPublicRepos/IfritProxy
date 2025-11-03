@@ -1,14 +1,18 @@
 package detection
 
 import (
+	"bytes"
 	"crypto/md5"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"strings"
 
 	"github.com/0tSystemsPublicRepos/ifrit/internal/database"
+	"github.com/0tSystemsPublicRepos/ifrit/internal/llm"
 )
 
 type DetectionEngine struct {
@@ -16,6 +20,7 @@ type DetectionEngine struct {
 	whitelistIPs   map[string]bool
 	whitelistPaths []*regexp.Regexp
 	db             *database.SQLiteDB
+	llmManager     *llm.Manager
 }
 
 type Rule struct {
@@ -36,10 +41,11 @@ type DetectionResult struct {
 	ResponseCode    int
 }
 
-func NewDetectionEngine(whitelistIPs []string, whitelistPaths []string, db *database.SQLiteDB) *DetectionEngine {
+func NewDetectionEngine(whitelistIPs []string, whitelistPaths []string, db *database.SQLiteDB, llmManager *llm.Manager) *DetectionEngine {
 	engine := &DetectionEngine{
 		whitelistIPs: make(map[string]bool),
 		db:           db,
+		llmManager:   llmManager,
 	}
 
 	for _, ip := range whitelistIPs {
@@ -137,7 +143,6 @@ func (de *DetectionEngine) CheckLocalRules(r *http.Request) *DetectionResult {
 }
 
 func (de *DetectionEngine) CheckDatabasePatterns(r *http.Request) *DetectionResult {
-	// Get all patterns from database and check if path matches
 	patterns, err := de.db.GetAllPatterns()
 	if err != nil {
 		return nil
@@ -147,12 +152,10 @@ func (de *DetectionEngine) CheckDatabasePatterns(r *http.Request) *DetectionResu
 		pathPattern := pattern["path_pattern"].(string)
 		method := pattern["http_method"].(string)
 
-		// Check if method matches
 		if method != r.Method {
 			continue
 		}
 
-		// Check if path matches exactly
 		if pathPattern == r.URL.Path {
 			return &DetectionResult{
 				IsAttack:        true,
@@ -170,10 +173,83 @@ func (de *DetectionEngine) CheckDatabasePatterns(r *http.Request) *DetectionResu
 	return nil
 }
 
+// Stage 4: LLM Analysis for unknown requests
+func (de *DetectionEngine) CheckLLMAnalysis(r *http.Request) *DetectionResult {
+	if de.llmManager == nil {
+		return nil
+	}
+
+	// Extract request data for LLM
+	requestData := de.ExtractRequestData(r)
+
+	// Call LLM
+	result, err := de.llmManager.AnalyzeRequest(requestData)
+	if err != nil {
+		fmt.Printf("LLM analysis error: %v\n", err)
+		return nil
+	}
+
+	if !result.IsAttack {
+		return nil
+	}
+
+	// Store the result in database for future learning
+	payload, _ := de.llmManager.GeneratePayload(result.AttackType)
+	payloadJSON, _ := json.Marshal(payload)
+	de.db.StoreAttackPattern(
+		de.GenerateSignature(r),
+		result.AttackType,
+		result.Classification,
+		r.Method,
+		r.URL.Path,
+		string(payloadJSON),
+		200,
+		"llm",
+		result.Confidence,
+	)
+
+	return &DetectionResult{
+		IsAttack:        true,
+		AttackType:      result.AttackType,
+		Classification:  result.Classification,
+		Confidence:      result.Confidence,
+		Signature:       de.GenerateSignature(r),
+		DetectionStage:  4,
+		PayloadTemplate: string(payloadJSON),
+		ResponseCode:    200,
+	}
+}
+
 func (de *DetectionEngine) GenerateSignature(r *http.Request) string {
 	data := fmt.Sprintf("%s|%s|%s", r.Method, r.URL.Path, r.URL.RawQuery)
 	hash := md5.Sum([]byte(data))
 	return hex.EncodeToString(hash[:])
+}
+
+func (de *DetectionEngine) ExtractRequestData(r *http.Request) map[string]string {
+	data := make(map[string]string)
+
+	data["method"] = r.Method
+	data["path"] = r.URL.Path
+	data["query"] = r.URL.RawQuery
+
+	// Extract headers (exclude sensitive ones)
+	headerStr := ""
+	for key, values := range r.Header {
+		if !isSensitiveHeader(key) {
+			headerStr += fmt.Sprintf("%s: %s; ", key, strings.Join(values, ","))
+		}
+	}
+	data["headers"] = headerStr
+
+	// Extract body
+	if r.Body != nil {
+		bodyBytes, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+		data["body"] = string(bodyBytes)
+	}
+
+	return data
 }
 
 func (de *DetectionEngine) ExtractSuspiciousContent(r *http.Request) map[string]string {
@@ -191,4 +267,15 @@ func (de *DetectionEngine) ExtractSuspiciousContent(r *http.Request) map[string]
 	}
 
 	return content
+}
+
+func isSensitiveHeader(name string) bool {
+	sensitive := map[string]bool{
+		"Authorization": true,
+		"Cookie":        true,
+		"X-API-Key":     true,
+		"X-Auth-Token":  true,
+		"X-Secret":      true,
+	}
+	return sensitive[name]
 }

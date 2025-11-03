@@ -1,0 +1,751 @@
+package main
+
+import (
+	"database/sql"
+	"fmt"
+	"os"
+	"strings"
+	"text/tabwriter"
+	"time"
+
+	_ "github.com/mattn/go-sqlite3"
+	"github.com/spf13/cobra"
+)
+
+var db *sql.DB
+
+// Entity represents an attack entity stored in the database
+type Entity struct {
+	ID           int
+	Type         string
+	Value        string
+	Severity     string
+	FirstSeen    string
+	LastSeen     string
+	Count        int
+	Description  string
+	Active       bool
+}
+
+// ExceptionRule represents an exception/whitelist rule
+type ExceptionRule struct {
+	ID          int
+	EntityType  string
+	Pattern     string
+	Reason      string
+	CreatedBy   string
+	CreatedAt   string
+	ExpiresAt   string
+	Active      bool
+}
+
+// AttackRecord represents an attack instance
+type AttackRecord struct {
+	ID          int
+	SourceIP    string
+	Method      string
+	Path        string
+	Payload     string
+	DetectedAt  string
+	ThreatLevel string
+	Blocked     bool
+	Response    string
+}
+
+func init() {
+	cobra.OnInitialize(initDB)
+}
+
+func initDB() {
+	var err error
+	db, err = sql.Open("sqlite3", "data/ifrit.db")
+	if err != nil {
+		fmt.Printf("Error opening database: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func main() {
+	rootCmd := &cobra.Command{
+		Use:   "ifrit-cli",
+		Short: "IFRIT CLI - Manage IFRIT Proxy Database",
+		Long: `IFRIT CLI is a command-line tool to manage the IFRIT Proxy SQLite database.
+Manage entities, exception rules, and view attack data directly from the command line.`,
+	}
+
+	// Entity commands
+	entityCmd := &cobra.Command{
+		Use:   "entity",
+		Short: "Manage entities (IPs, patterns, etc)",
+	}
+
+	entityCmd.AddCommand(
+		&cobra.Command{
+			Use:   "list",
+			Short: "List all entities",
+			Run:   listEntities,
+		},
+		&cobra.Command{
+			Use:   "add [type] [value]",
+			Short: "Add a new entity (type: ip, domain, path, payload)",
+			Args:  cobra.MinimumNArgs(2),
+			Run:   addEntity,
+		},
+		&cobra.Command{
+			Use:   "remove [id]",
+			Short: "Remove an entity by ID",
+			Args:  cobra.ExactArgs(1),
+			Run:   removeEntity,
+		},
+		&cobra.Command{
+			Use:   "view [id]",
+			Short: "View details of a specific entity",
+			Args:  cobra.ExactArgs(1),
+			Run:   viewEntity,
+		},
+		&cobra.Command{
+			Use:   "toggle [id]",
+			Short: "Toggle entity active/inactive status",
+			Args:  cobra.ExactArgs(1),
+			Run:   toggleEntity,
+		},
+		&cobra.Command{
+			Use:   "search [type] [query]",
+			Short: "Search entities by type and pattern",
+			Args:  cobra.MinimumNArgs(2),
+			Run:   searchEntities,
+		},
+	)
+
+	// Exception rule commands
+	ruleCmd := &cobra.Command{
+		Use:   "rule",
+		Short: "Manage exception rules",
+	}
+
+	ruleCmd.AddCommand(
+		&cobra.Command{
+			Use:   "list",
+			Short: "List all exception rules",
+			Run:   listRules,
+		},
+		&cobra.Command{
+			Use:   "add [entity-type] [pattern]",
+			Short: "Add a new exception rule",
+			Args:  cobra.MinimumNArgs(2),
+			Run:   addRule,
+		},
+		&cobra.Command{
+			Use:   "remove [id]",
+			Short: "Remove an exception rule by ID",
+			Args:  cobra.ExactArgs(1),
+			Run:   removeRule,
+		},
+		&cobra.Command{
+			Use:   "enable [id]",
+			Short: "Enable an exception rule",
+			Args:  cobra.ExactArgs(1),
+			Run:   enableRule,
+		},
+		&cobra.Command{
+			Use:   "disable [id]",
+			Short: "Disable an exception rule",
+			Args:  cobra.ExactArgs(1),
+			Run:   disableRule,
+		},
+	)
+
+	// Attack commands
+	attackCmd := &cobra.Command{
+		Use:   "attack",
+		Short: "View and manage attack records",
+	}
+
+	attackCmd.AddCommand(
+		&cobra.Command{
+			Use:   "list",
+			Short: "List recent attacks",
+			Run:   listAttacks,
+		},
+		&cobra.Command{
+			Use:   "view [id]",
+			Short: "View attack details",
+			Args:  cobra.ExactArgs(1),
+			Run:   viewAttack,
+		},
+		&cobra.Command{
+			Use:   "stats",
+			Short: "Show attack statistics",
+			Run:   attackStats,
+		},
+		&cobra.Command{
+			Use:   "by-ip [ip]",
+			Short: "Show all attacks from a specific IP",
+			Args:  cobra.ExactArgs(1),
+			Run:   attacksByIP,
+		},
+		&cobra.Command{
+			Use:   "by-type [type]",
+			Short: "Show attacks by type (sql, xss, path, probe, etc)",
+			Args:  cobra.ExactArgs(1),
+			Run:   attacksByType,
+		},
+	)
+
+	// Database commands
+	dbCmd := &cobra.Command{
+		Use:   "db",
+		Short: "Database operations",
+	}
+
+	dbCmd.AddCommand(
+		&cobra.Command{
+			Use:   "stats",
+			Short: "Show database statistics",
+			Run:   dbStats,
+		},
+		&cobra.Command{
+			Use:   "clean",
+			Short: "Clean old records (older than 30 days)",
+			Run:   cleanDB,
+		},
+		&cobra.Command{
+			Use:   "reset",
+			Short: "Reset entire database (DANGEROUS)",
+			Run:   resetDB,
+		},
+	)
+
+	rootCmd.AddCommand(entityCmd, ruleCmd, attackCmd, dbCmd)
+
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+}
+
+// Entity operations
+func listEntities(cmd *cobra.Command, args []string) {
+	rows, err := db.Query(`
+		SELECT id, entity_type, entity_value, severity, first_seen, last_seen, occurrence_count, description, is_active
+		FROM threat_entities
+		ORDER BY last_seen DESC
+	`)
+	if err != nil {
+		fmt.Printf("Error querying entities: %v\n", err)
+		return
+	}
+	defer rows.Close()
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "ID\tTYPE\tVALUE\tSEVERITY\tCOUNT\tACTIVE\tLAST SEEN")
+
+	for rows.Next() {
+		var entity Entity
+		err := rows.Scan(&entity.ID, &entity.Type, &entity.Value, &entity.Severity,
+			&entity.FirstSeen, &entity.LastSeen, &entity.Count, &entity.Description, &entity.Active)
+		if err != nil {
+			fmt.Printf("Error scanning row: %v\n", err)
+			continue
+		}
+		active := "✓"
+		if !entity.Active {
+			active = "✗"
+		}
+		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%d\t%s\t%s\n",
+			entity.ID, entity.Type, entity.Value, entity.Severity, entity.Count, active, entity.LastSeen)
+	}
+	w.Flush()
+}
+
+func addEntity(cmd *cobra.Command, args []string) {
+	entityType := args[0]
+	value := strings.Join(args[1:], " ")
+
+	stmt, err := db.Prepare(`
+		INSERT INTO threat_entities (entity_type, entity_value, severity, first_seen, last_seen, occurrence_count, is_active)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		fmt.Printf("Error preparing statement: %v\n", err)
+		return
+	}
+	defer stmt.Close()
+
+	now := time.Now().Format(time.RFC3339)
+	result, err := stmt.Exec(entityType, value, "medium", now, now, 1, true)
+	if err != nil {
+		fmt.Printf("Error inserting entity: %v\n", err)
+		return
+	}
+
+	id, _ := result.LastInsertId()
+	fmt.Printf("✓ Entity added successfully (ID: %d)\n", id)
+}
+
+func removeEntity(cmd *cobra.Command, args []string) {
+	id := args[0]
+
+	stmt, err := db.Prepare("DELETE FROM threat_entities WHERE id = ?")
+	if err != nil {
+		fmt.Printf("Error preparing statement: %v\n", err)
+		return
+	}
+	defer stmt.Close()
+
+	result, err := stmt.Exec(id)
+	if err != nil {
+		fmt.Printf("Error deleting entity: %v\n", err)
+		return
+	}
+
+	affected, _ := result.RowsAffected()
+	if affected > 0 {
+		fmt.Printf("✓ Entity %s deleted successfully\n", id)
+	} else {
+		fmt.Printf("✗ Entity %s not found\n", id)
+	}
+}
+
+func viewEntity(cmd *cobra.Command, args []string) {
+	id := args[0]
+
+	row := db.QueryRow(`
+		SELECT id, entity_type, entity_value, severity, first_seen, last_seen, occurrence_count, description, is_active
+		FROM threat_entities WHERE id = ?
+	`, id)
+
+	var entity Entity
+	err := row.Scan(&entity.ID, &entity.Type, &entity.Value, &entity.Severity,
+		&entity.FirstSeen, &entity.LastSeen, &entity.Count, &entity.Description, &entity.Active)
+	if err != nil {
+		fmt.Printf("Error querying entity: %v\n", err)
+		return
+	}
+
+	active := "Active"
+	if !entity.Active {
+		active = "Inactive"
+	}
+
+	fmt.Printf(`
+Entity Details
+==============
+ID:          %d
+Type:        %s
+Value:       %s
+Severity:    %s
+Status:      %s
+Count:       %d
+First Seen:  %s
+Last Seen:   %s
+Description: %s
+`, entity.ID, entity.Type, entity.Value, entity.Severity, active, entity.Count, entity.FirstSeen, entity.LastSeen, entity.Description)
+}
+
+func toggleEntity(cmd *cobra.Command, args []string) {
+	id := args[0]
+
+	stmt, err := db.Prepare("UPDATE threat_entities SET is_active = NOT is_active WHERE id = ?")
+	if err != nil {
+		fmt.Printf("Error preparing statement: %v\n", err)
+		return
+	}
+	defer stmt.Close()
+
+	result, err := stmt.Exec(id)
+	if err != nil {
+		fmt.Printf("Error updating entity: %v\n", err)
+		return
+	}
+
+	affected, _ := result.RowsAffected()
+	if affected > 0 {
+		fmt.Printf("✓ Entity %s status toggled\n", id)
+	} else {
+		fmt.Printf("✗ Entity %s not found\n", id)
+	}
+}
+
+func searchEntities(cmd *cobra.Command, args []string) {
+	entityType := args[0]
+	query := strings.Join(args[1:], "%")
+
+	rows, err := db.Query(`
+		SELECT id, entity_type, entity_value, severity, first_seen, last_seen, occurrence_count, is_active
+		FROM threat_entities
+		WHERE entity_type = ? AND entity_value LIKE ?
+		ORDER BY occurrence_count DESC
+	`, entityType, "%"+query+"%")
+	if err != nil {
+		fmt.Printf("Error searching entities: %v\n", err)
+		return
+	}
+	defer rows.Close()
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "ID\tVALUE\tSEVERITY\tCOUNT\tACTIVE")
+
+	count := 0
+	for rows.Next() {
+		var entity Entity
+		err := rows.Scan(&entity.ID, &entity.Type, &entity.Value, &entity.Severity, &entity.FirstSeen, &entity.LastSeen, &entity.Count, &entity.Active)
+		if err != nil {
+			continue
+		}
+		active := "✓"
+		if !entity.Active {
+			active = "✗"
+		}
+		fmt.Fprintf(w, "%d\t%s\t%s\t%d\t%s\n", entity.ID, entity.Value, entity.Severity, entity.Count, active)
+		count++
+	}
+	w.Flush()
+	fmt.Printf("\nFound %d matching entities\n", count)
+}
+
+// Exception rule operations
+func listRules(cmd *cobra.Command, args []string) {
+	rows, err := db.Query(`
+		SELECT id, entity_type, pattern, reason, created_by, created_at, expires_at, is_active
+		FROM exception_rules
+		ORDER BY created_at DESC
+	`)
+	if err != nil {
+		fmt.Printf("Error querying rules: %v\n", err)
+		return
+	}
+	defer rows.Close()
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "ID\tTYPE\tPATTERN\tREASON\tACTIVE\tEXPIRES")
+
+	for rows.Next() {
+		var rule ExceptionRule
+		err := rows.Scan(&rule.ID, &rule.EntityType, &rule.Pattern, &rule.Reason, &rule.CreatedBy, &rule.CreatedAt, &rule.ExpiresAt, &rule.Active)
+		if err != nil {
+			continue
+		}
+		active := "✓"
+		if !rule.Active {
+			active = "✗"
+		}
+		expires := "Never"
+		if rule.ExpiresAt != "" && rule.ExpiresAt != "<nil>" {
+			expires = rule.ExpiresAt
+		}
+		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\n", rule.ID, rule.EntityType, rule.Pattern, rule.Reason, active, expires)
+	}
+	w.Flush()
+}
+
+func addRule(cmd *cobra.Command, args []string) {
+	entityType := args[0]
+	pattern := strings.Join(args[1:], " ")
+
+	stmt, err := db.Prepare(`
+		INSERT INTO exception_rules (entity_type, pattern, reason, created_by, created_at, is_active)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		fmt.Printf("Error preparing statement: %v\n", err)
+		return
+	}
+	defer stmt.Close()
+
+	now := time.Now().Format(time.RFC3339)
+	result, err := stmt.Exec(entityType, pattern, "Manual whitelist", "admin", now, true)
+	if err != nil {
+		fmt.Printf("Error inserting rule: %v\n", err)
+		return
+	}
+
+	id, _ := result.LastInsertId()
+	fmt.Printf("✓ Exception rule added successfully (ID: %d)\n", id)
+}
+
+func removeRule(cmd *cobra.Command, args []string) {
+	id := args[0]
+
+	stmt, err := db.Prepare("DELETE FROM exception_rules WHERE id = ?")
+	if err != nil {
+		fmt.Printf("Error preparing statement: %v\n", err)
+		return
+	}
+	defer stmt.Close()
+
+	result, err := stmt.Exec(id)
+	if err != nil {
+		fmt.Printf("Error deleting rule: %v\n", err)
+		return
+	}
+
+	affected, _ := result.RowsAffected()
+	if affected > 0 {
+		fmt.Printf("✓ Rule %s deleted\n", id)
+	}
+}
+
+func enableRule(cmd *cobra.Command, args []string) {
+	id := args[0]
+	stmt, err := db.Prepare("UPDATE exception_rules SET is_active = 1 WHERE id = ?")
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+	defer stmt.Close()
+	stmt.Exec(id)
+	fmt.Printf("✓ Rule %s enabled\n", id)
+}
+
+func disableRule(cmd *cobra.Command, args []string) {
+	id := args[0]
+	stmt, err := db.Prepare("UPDATE exception_rules SET is_active = 0 WHERE id = ?")
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+	defer stmt.Close()
+	stmt.Exec(id)
+	fmt.Printf("✓ Rule %s disabled\n", id)
+}
+
+// Attack operations
+func listAttacks(cmd *cobra.Command, args []string) {
+	rows, err := db.Query(`
+		SELECT id, source_ip, http_method, requested_path, payload, detection_timestamp, threat_level, was_blocked, honeypot_response
+		FROM attack_instances
+		ORDER BY detection_timestamp DESC LIMIT 50
+	`)
+	if err != nil {
+		fmt.Printf("Error querying attacks: %v\n", err)
+		return
+	}
+	defer rows.Close()
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "ID\tSOURCE IP\tMETHOD\tPATH\tTHREAT LEVEL\tBLOCKED\tTIMESTAMP")
+
+	for rows.Next() {
+		var attack AttackRecord
+		err := rows.Scan(&attack.ID, &attack.SourceIP, &attack.Method, &attack.Path, &attack.Payload, &attack.DetectedAt, &attack.ThreatLevel, &attack.Blocked, &attack.Response)
+		if err != nil {
+			continue
+		}
+		blocked := "✗"
+		if attack.Blocked {
+			blocked = "✓"
+		}
+		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\t%s\n", attack.ID, attack.SourceIP, attack.Method, attack.Path, attack.ThreatLevel, blocked, attack.DetectedAt)
+	}
+	w.Flush()
+}
+
+func viewAttack(cmd *cobra.Command, args []string) {
+	id := args[0]
+
+	row := db.QueryRow(`
+		SELECT id, source_ip, http_method, requested_path, payload, detection_timestamp, threat_level, was_blocked, honeypot_response
+		FROM attack_instances WHERE id = ?
+	`, id)
+
+	var attack AttackRecord
+	err := row.Scan(&attack.ID, &attack.SourceIP, &attack.Method, &attack.Path, &attack.Payload, &attack.DetectedAt, &attack.ThreatLevel, &attack.Blocked, &attack.Response)
+	if err != nil {
+		fmt.Printf("Error querying attack: %v\n", err)
+		return
+	}
+
+	blocked := "No"
+	if attack.Blocked {
+		blocked = "Yes"
+	}
+
+	fmt.Printf(`
+Attack Details
+==============
+ID:          %d
+Source IP:   %s
+Method:      %s
+Path:        %s
+Threat Level: %s
+Blocked:     %s
+Timestamp:   %s
+Payload:     %s
+Response:    %s
+`, attack.ID, attack.SourceIP, attack.Method, attack.Path, attack.ThreatLevel, blocked, attack.DetectedAt, attack.Payload, attack.Response)
+}
+
+func attackStats(cmd *cobra.Command, args []string) {
+	row := db.QueryRow(`
+		SELECT 
+			COUNT(*) as total_attacks,
+			COUNT(CASE WHEN was_blocked = 1 THEN 1 END) as blocked_attacks,
+			COUNT(DISTINCT source_ip) as unique_ips,
+			MAX(detection_timestamp) as latest_attack
+		FROM attack_instances
+	`)
+
+	var total, blocked, uniqueIPs int
+	var latestAttack string
+	err := row.Scan(&total, &blocked, &uniqueIPs, &latestAttack)
+	if err != nil {
+		fmt.Printf("Error querying stats: %v\n", err)
+		return
+	}
+
+	blockRate := 0.0
+	if total > 0 {
+		blockRate = (float64(blocked) / float64(total)) * 100
+	}
+
+	fmt.Printf(`
+Attack Statistics
+=================
+Total Attacks:    %d
+Blocked Attacks:  %d (%.1f%%)
+Unique IPs:       %d
+Latest Attack:    %s
+`, total, blocked, blockRate, uniqueIPs, latestAttack)
+}
+
+func attacksByIP(cmd *cobra.Command, args []string) {
+	ip := args[0]
+
+	rows, err := db.Query(`
+		SELECT id, http_method, requested_path, threat_level, was_blocked, detection_timestamp
+		FROM attack_instances
+		WHERE source_ip = ?
+		ORDER BY detection_timestamp DESC
+	`, ip)
+	if err != nil {
+		fmt.Printf("Error querying attacks: %v\n", err)
+		return
+	}
+	defer rows.Close()
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintf(w, "Attacks from %s\n", ip)
+	fmt.Fprintln(w, "ID\tMETHOD\tPATH\tTHREAT LEVEL\tBLOCKED\tTIMESTAMP")
+
+	count := 0
+	for rows.Next() {
+		var id int
+		var method, path, threatLevel, timestamp string
+		var blocked bool
+		err := rows.Scan(&id, &method, &path, &threatLevel, &blocked, &timestamp)
+		if err != nil {
+			continue
+		}
+		blockedStr := "✗"
+		if blocked {
+			blockedStr = "✓"
+		}
+		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\n", id, method, path, threatLevel, blockedStr, timestamp)
+		count++
+	}
+	w.Flush()
+	fmt.Printf("\nTotal attacks from this IP: %d\n", count)
+}
+
+func attacksByType(cmd *cobra.Command, args []string) {
+	attackType := args[0]
+
+	rows, err := db.Query(`
+		SELECT id, source_ip, http_method, requested_path, threat_level, was_blocked, detection_timestamp
+		FROM attack_instances
+		WHERE threat_level = ?
+		ORDER BY detection_timestamp DESC
+	`, attackType)
+	if err != nil {
+		fmt.Printf("Error querying attacks: %v\n", err)
+		return
+	}
+	defer rows.Close()
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintf(w, "Attacks of type: %s\n", attackType)
+	fmt.Fprintln(w, "ID\tSOURCE IP\tMETHOD\tPATH\tBLOCKED\tTIMESTAMP")
+
+	count := 0
+	for rows.Next() {
+		var id int
+		var sourceIP, method, path, timestamp string
+		var blocked bool
+		err := rows.Scan(&id, &sourceIP, &method, &path, &attackType, &blocked, &timestamp)
+		if err != nil {
+			continue
+		}
+		blockedStr := "✗"
+		if blocked {
+			blockedStr = "✓"
+		}
+		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\n", id, sourceIP, method, path, blockedStr, timestamp)
+		count++
+	}
+	w.Flush()
+	fmt.Printf("\nTotal attacks of this type: %d\n", count)
+}
+
+// Database operations
+func dbStats(cmd *cobra.Command, args []string) {
+	var entities, rules, attacks int
+
+	db.QueryRow("SELECT COUNT(*) FROM threat_entities").Scan(&entities)
+	db.QueryRow("SELECT COUNT(*) FROM exception_rules").Scan(&rules)
+	db.QueryRow("SELECT COUNT(*) FROM attack_instances").Scan(&attacks)
+
+	fileInfo, err := os.Stat("data/ifrit.db")
+	size := "unknown"
+	if err == nil {
+		size = fmt.Sprintf("%d bytes", fileInfo.Size())
+	}
+
+	fmt.Printf(`
+Database Statistics
+===================
+Threat Entities:   %d
+Exception Rules:   %d
+Attack Instances:  %d
+Database Size:     %s
+`, entities, rules, attacks, size)
+}
+
+func cleanDB(cmd *cobra.Command, args []string) {
+	thirtyDaysAgo := time.Now().AddDate(0, 0, -30).Format(time.RFC3339)
+
+	stmt, err := db.Prepare("DELETE FROM attack_instances WHERE detection_timestamp < ?")
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+	defer stmt.Close()
+
+	result, err := stmt.Exec(thirtyDaysAgo)
+	if err != nil {
+		fmt.Printf("Error cleaning database: %v\n", err)
+		return
+	}
+
+	affected, _ := result.RowsAffected()
+	fmt.Printf("✓ Cleaned %d old attack records (older than 30 days)\n", affected)
+}
+
+func resetDB(cmd *cobra.Command, args []string) {
+	fmt.Println("⚠️  WARNING: This will delete ALL database records!")
+	fmt.Print("Type 'yes' to confirm: ")
+
+	var response string
+	fmt.Scanln(&response)
+
+	if response != "yes" {
+		fmt.Println("Operation cancelled")
+		return
+	}
+
+	db.Exec("DELETE FROM attack_instances")
+	db.Exec("DELETE FROM threat_entities")
+	db.Exec("DELETE FROM exception_rules")
+
+	fmt.Println("✓ Database has been reset")
+}

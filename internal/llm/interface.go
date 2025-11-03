@@ -1,11 +1,7 @@
 package llm
 
-import (
-	"net/http"
-)
-
 type Provider interface {
-	AnalyzeRequest(req *http.Request, sanitizedData map[string]string) (*AnalysisResult, error)
+	AnalyzeRequest(requestData map[string]string) (*AnalysisResult, error)
 	GeneratePayload(attackType string) (map[string]interface{}, error)
 	GetName() string
 }
@@ -16,6 +12,7 @@ type AnalysisResult struct {
 	Classification string
 	Confidence     float64
 	Reasoning      string
+	TokensUsed     int
 }
 
 type ProviderConfig struct {

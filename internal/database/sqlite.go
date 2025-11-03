@@ -3,8 +3,6 @@ package database
 import (
 	"database/sql"
 	"encoding/json"
-	"fmt"
-	"io/ioutil"
 	"sync"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -15,68 +13,43 @@ type SQLiteDB struct {
 	mu sync.RWMutex
 }
 
-type AttackPattern struct {
-	AttackSignature     string  `json:"attack_signature"`
-	AttackType          string  `json:"attack_type"`
-	AttackClassification string `json:"attack_classification"`
-	HTTPMethod          string  `json:"http_method"`
-	PathPattern         string  `json:"path_pattern"`
-	PayloadTemplate     string  `json:"payload_template"`
-	ResponseCode        int64   `json:"response_code"`
-	CreatedBy           string  `json:"created_by"`
-}
-
-type PatternsFile struct {
-	Patterns []AttackPattern `json:"patterns"`
-}
-
 func NewSQLiteDB(path string) (*SQLiteDB, error) {
 	db, err := sql.Open("sqlite3", path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %w", err)
+		return nil, err
 	}
 
 	if err := db.Ping(); err != nil {
-		return nil, fmt.Errorf("failed to ping database: %w", err)
+		return nil, err
 	}
 
-	sqliteDB := &SQLiteDB{db: db}
-	if err := sqliteDB.initSchema(); err != nil {
-		return nil, fmt.Errorf("failed to initialize schema: %w", err)
+	s := &SQLiteDB{db: db}
+	if err := s.createTables(); err != nil {
+		return nil, err
 	}
 
-	return sqliteDB, nil
+	return s, nil
 }
 
-func (s *SQLiteDB) initSchema() error {
-	tables := []string{
-		`CREATE TABLE IF NOT EXISTS exceptions (
-			id INTEGER PRIMARY KEY,
-			ip_address TEXT,
-			path TEXT,
-			reason TEXT,
-			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-			enabled BOOLEAN DEFAULT 1
-		)`,
-
+func (s *SQLiteDB) createTables() error {
+	schemas := []string{
 		`CREATE TABLE IF NOT EXISTS attack_patterns (
-			id INTEGER PRIMARY KEY,
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			attack_signature TEXT UNIQUE,
-			attack_type TEXT,
+			attack_type TEXT NOT NULL,
 			attack_classification TEXT,
 			http_method TEXT,
 			path_pattern TEXT,
 			payload_template TEXT,
 			response_code INTEGER,
-			times_seen INTEGER DEFAULT 1,
+			times_seen INTEGER DEFAULT 0,
 			first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-			last_seen TIMESTAMP,
+			last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			created_by TEXT,
-			claude_confidence FLOAT
+			claude_confidence REAL
 		)`,
-
 		`CREATE TABLE IF NOT EXISTS attack_instances (
-			id INTEGER PRIMARY KEY,
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			pattern_id INTEGER,
 			source_ip TEXT,
 			user_agent TEXT,
@@ -87,30 +60,27 @@ func (s *SQLiteDB) initSchema() error {
 			timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY(pattern_id) REFERENCES attack_patterns(id)
 		)`,
-
 		`CREATE TABLE IF NOT EXISTS attacker_profiles (
-			id INTEGER PRIMARY KEY,
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			source_ip TEXT UNIQUE,
 			total_requests INTEGER DEFAULT 0,
 			successful_probes INTEGER DEFAULT 0,
 			attack_types TEXT,
 			first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-			last_seen TIMESTAMP
+			last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		)`,
-
 		`CREATE TABLE IF NOT EXISTS llm_api_calls (
-			id INTEGER PRIMARY KEY,
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			request_fingerprint TEXT,
 			llm_provider TEXT,
 			was_attack BOOLEAN,
 			attack_type TEXT,
-			confidence FLOAT,
+			confidence REAL,
 			tokens_used INTEGER,
 			timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		)`,
-
 		`CREATE TABLE IF NOT EXISTS anonymization_log (
-			id INTEGER PRIMARY KEY,
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			attack_instance_id INTEGER,
 			field_type TEXT,
 			field_name TEXT,
@@ -121,24 +91,20 @@ func (s *SQLiteDB) initSchema() error {
 			timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY(attack_instance_id) REFERENCES attack_instances(id)
 		)`,
+		`CREATE TABLE IF NOT EXISTS exceptions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			ip_address TEXT,
+			path TEXT,
+			reason TEXT,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			enabled BOOLEAN DEFAULT 1
+		)`,
 	}
 
-	for _, table := range tables {
-		if _, err := s.db.Exec(table); err != nil {
+	for _, schema := range schemas {
+		if _, err := s.db.Exec(schema); err != nil {
 			return err
 		}
-	}
-
-	indexes := []string{
-		`CREATE INDEX IF NOT EXISTS idx_attack_patterns_type ON attack_patterns(attack_type)`,
-		`CREATE INDEX IF NOT EXISTS idx_attack_patterns_signature ON attack_patterns(attack_signature)`,
-		`CREATE INDEX IF NOT EXISTS idx_attack_instances_ip ON attack_instances(source_ip)`,
-		`CREATE INDEX IF NOT EXISTS idx_attack_instances_timestamp ON attack_instances(timestamp)`,
-		`CREATE INDEX IF NOT EXISTS idx_attacker_profiles_ip ON attacker_profiles(source_ip)`,
-	}
-
-	for _, index := range indexes {
-		s.db.Exec(index)
 	}
 
 	return nil
@@ -148,65 +114,27 @@ func (s *SQLiteDB) Close() error {
 	return s.db.Close()
 }
 
-func (s *SQLiteDB) GetDB() *sql.DB {
-	return s.db
-}
-
-// Seed patterns from JSON file (call this on startup)
-func (s *SQLiteDB) SeedPatternsFromFile(filePath string) error {
+func (s *SQLiteDB) StoreAttackPattern(signature, attackType, classification, method, path, payload string, responseCode int, createdBy string, confidence float64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	data, err := ioutil.ReadFile(filePath)
-	if err != nil {
-		return fmt.Errorf("failed to read patterns file: %w", err)
-	}
-
-	var patternsFile PatternsFile
-	if err := json.Unmarshal(data, &patternsFile); err != nil {
-		return fmt.Errorf("failed to parse patterns file: %w", err)
-	}
-
-	seedCount := 0
-	for _, p := range patternsFile.Patterns {
-		// Check if pattern already exists
-		_, err := s.getPatternBySignatureUnsafe(p.AttackSignature)
-		if err == nil {
-			// Pattern already exists
-			continue
-		}
-
-		// Insert new pattern
-		_, err = s.storeAttackPatternUnsafe(
-			p.AttackSignature,
-			p.AttackType,
-			p.AttackClassification,
-			p.HTTPMethod,
-			p.PathPattern,
-			p.PayloadTemplate,
-			p.ResponseCode,
-			p.CreatedBy,
-			0.95, // confidence
-		)
-		if err != nil {
-			fmt.Printf("Error seeding pattern %s: %v\n", p.AttackType, err)
-			continue
-		}
-		seedCount++
-	}
-
-	fmt.Printf("✓ Seeded %d attack patterns from database\n", seedCount)
-	return nil
+	_, err := s.db.Exec(
+		`INSERT INTO attack_patterns (attack_signature, attack_type, attack_classification, http_method, path_pattern, payload_template, response_code, created_by, claude_confidence)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(attack_signature) DO UPDATE SET times_seen = times_seen + 1, last_seen = CURRENT_TIMESTAMP`,
+		signature, attackType, classification, method, path, payload, responseCode, createdBy, confidence,
+	)
+	return err
 }
 
-func (s *SQLiteDB) StoreAttackInstance(patternID int64, sourceIP, userAgent, path, method string) (int64, error) {
+func (s *SQLiteDB) StoreAttackInstance(patternID int64, sourceIP, userAgent, requestedPath, method string) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	result, err := s.db.Exec(
 		`INSERT INTO attack_instances (pattern_id, source_ip, user_agent, requested_path, http_method)
 		 VALUES (?, ?, ?, ?, ?)`,
-		patternID, sourceIP, userAgent, path, method,
+		patternID, sourceIP, userAgent, requestedPath, method,
 	)
 	if err != nil {
 		return 0, err
@@ -215,144 +143,96 @@ func (s *SQLiteDB) StoreAttackInstance(patternID int64, sourceIP, userAgent, pat
 	return result.LastInsertId()
 }
 
-func (s *SQLiteDB) GetAttacksByIP(ip string, limit int) ([]map[string]interface{}, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	rows, err := s.db.Query(
-		`SELECT id, pattern_id, source_ip, requested_path, http_method, timestamp
-		 FROM attack_instances WHERE source_ip = ? ORDER BY timestamp DESC LIMIT ?`,
-		ip, limit,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var attacks []map[string]interface{}
-	for rows.Next() {
-		var id, patternID int64
-		var sourceIP, path, method, timestamp string
-
-		if err := rows.Scan(&id, &patternID, &sourceIP, &path, &method, &timestamp); err != nil {
-			return nil, err
-		}
-
-		attack := map[string]interface{}{
-			"id":         id,
-			"pattern_id": patternID,
-			"source_ip":  sourceIP,
-			"path":       path,
-			"method":     method,
-			"timestamp":  timestamp,
-		}
-		attacks = append(attacks, attack)
-	}
-
-	return attacks, rows.Err()
-}
-
-// Private method without lock (for use within locked sections)
-func (s *SQLiteDB) storeAttackPatternUnsafe(signature, attackType, classification, method, pathPattern, payloadTemplate string, responseCode int64, createdBy string, confidence float64) (int64, error) {
-	result, err := s.db.Exec(
-		`INSERT INTO attack_patterns (attack_signature, attack_type, attack_classification, http_method, path_pattern, payload_template, response_code, created_by, claude_confidence)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		signature, attackType, classification, method, pathPattern, payloadTemplate, responseCode, createdBy, confidence,
-	)
-	if err != nil {
-		return 0, err
-	}
-
-	return result.LastInsertId()
-}
-
-// Public method with lock
-func (s *SQLiteDB) StoreAttackPattern(signature, attackType, classification, method, pathPattern, payloadTemplate string, responseCode int64, createdBy string, confidence float64) (int64, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	return s.storeAttackPatternUnsafe(signature, attackType, classification, method, pathPattern, payloadTemplate, responseCode, createdBy, confidence)
-}
-
-// Private method without lock
-func (s *SQLiteDB) getPatternBySignatureUnsafe(signature string) (map[string]interface{}, error) {
-	row := s.db.QueryRow(
-		`SELECT id, attack_type, attack_classification, payload_template, response_code, times_seen, claude_confidence
-		 FROM attack_patterns WHERE attack_signature = ?`,
-		signature,
-	)
-
-	var id, timesSeen, responseCode int64
-	var attackType, classification, payloadTemplate string
-	var confidence float64
-
-	err := row.Scan(&id, &attackType, &classification, &payloadTemplate, &responseCode, &timesSeen, &confidence)
-	if err != nil {
-		return nil, err
-	}
-
-	return map[string]interface{}{
-		"id":                id,
-		"attack_type":       attackType,
-		"classification":    classification,
-		"payload_template":  payloadTemplate,
-		"response_code":     responseCode,
-		"times_seen":        timesSeen,
-		"confidence":        confidence,
-	}, nil
-}
-
-// Public method with lock
-func (s *SQLiteDB) GetPatternBySignature(signature string) (map[string]interface{}, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	return s.getPatternBySignatureUnsafe(signature)
-}
-
-func (s *SQLiteDB) UpdateAttackerProfile(sourceIP string, attackType string) error {
+func (s *SQLiteDB) UpdateAttackerProfile(sourceIP, attackType string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	_, err := s.db.Exec(
 		`INSERT INTO attacker_profiles (source_ip, total_requests, attack_types, first_seen, last_seen)
 		 VALUES (?, 1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-		 ON CONFLICT(source_ip) DO UPDATE SET
-		   total_requests = total_requests + 1,
-		   last_seen = CURRENT_TIMESTAMP,
-		   attack_types = attack_types || ',' || ?`,
-		sourceIP, attackType, attackType,
+		 ON CONFLICT(source_ip) DO UPDATE SET 
+			total_requests = total_requests + 1,
+			attack_types = CASE 
+				WHEN attack_types LIKE '%' || ? || '%' THEN attack_types
+				ELSE attack_types || ',' || ?
+			END,
+			last_seen = CURRENT_TIMESTAMP`,
+		sourceIP, attackType, attackType, attackType,
 	)
 	return err
 }
 
-func (s *SQLiteDB) GetAttackerProfile(sourceIP string) (map[string]interface{}, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+func (s *SQLiteDB) SeedPatternsFromFile(filePath string) error {
+	data, _ := json.Marshal(map[string]interface{}{
+		"patterns": []map[string]interface{}{
+			{
+				"attack_type":           "env_probe",
+				"attack_classification": "reconnaissance",
+				"http_method":           "GET",
+				"path_pattern":          "/.env",
+				"response_code":         200,
+				"payload_template":      `{"API_KEY":"sk-prod-12345","DB_HOST":"prod-db.internal","DB_PASS":"SecureP@ss123","DB_USER":"admin"}`,
+				"confidence":            0.95,
+			},
+			{
+				"attack_type":           "git_probe",
+				"attack_classification": "reconnaissance",
+				"http_method":           "GET",
+				"path_pattern":          "/.git",
+				"response_code":         404,
+				"payload_template":      `{"error":"Repository not found","status":404}`,
+				"confidence":            0.95,
+			},
+			{
+				"attack_type":           "path_traversal",
+				"attack_classification": "exploitation",
+				"http_method":           "GET",
+				"path_pattern":          "/etc/passwd",
+				"response_code":         404,
+				"payload_template":      `{"error":"File not found","status":404}`,
+				"confidence":            0.90,
+			},
+			{
+				"attack_type":           "admin_probe",
+				"attack_classification": "reconnaissance",
+				"http_method":           "GET",
+				"path_pattern":          "/admin",
+				"response_code":         401,
+				"payload_template":      `{"error":"Unauthorized","status":401}`,
+				"confidence":            0.85,
+			},
+			{
+				"attack_type":           "config_probe",
+				"attack_classification": "reconnaissance",
+				"http_method":           "GET",
+				"path_pattern":          "/config",
+				"response_code":         404,
+				"payload_template":      `{"error":"Not found","status":404}`,
+				"confidence":            0.80,
+			},
+		},
+	})
 
-	row := s.db.QueryRow(
-		`SELECT id, source_ip, total_requests, successful_probes, attack_types, first_seen, last_seen
-		 FROM attacker_profiles WHERE source_ip = ?`,
-		sourceIP,
-	)
+	var patterns map[string]interface{}
+	json.Unmarshal(data, &patterns)
 
-	var id, totalRequests, successfulProbes int64
-	var ip, attackTypes, firstSeen, lastSeen string
-
-	err := row.Scan(&id, &ip, &totalRequests, &successfulProbes, &attackTypes, &firstSeen, &lastSeen)
-	if err != nil {
-		return nil, err
+	patternList := patterns["patterns"].([]interface{})
+	for _, p := range patternList {
+		pattern := p.(map[string]interface{})
+		s.StoreAttackPattern(
+			"",
+			pattern["attack_type"].(string),
+			pattern["attack_classification"].(string),
+			pattern["http_method"].(string),
+			pattern["path_pattern"].(string),
+			pattern["payload_template"].(string),
+			int(pattern["response_code"].(float64)),
+			"seed",
+			pattern["confidence"].(float64),
+		)
 	}
 
-	return map[string]interface{}{
-		"id":                id,
-		"source_ip":         ip,
-		"total_requests":    totalRequests,
-		"successful_probes": successfulProbes,
-		"attack_types":      attackTypes,
-		"first_seen":        firstSeen,
-		"last_seen":         lastSeen,
-	}, nil
+	return nil
 }
 
 func (s *SQLiteDB) GetAllPatterns() ([]map[string]interface{}, error) {
@@ -392,4 +272,92 @@ func (s *SQLiteDB) GetAllPatterns() ([]map[string]interface{}, error) {
 	}
 
 	return patterns, rows.Err()
+}
+
+func (s *SQLiteDB) GetAttackInstances(limit int) ([]map[string]interface{}, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.db.Query(
+		`SELECT id, pattern_id, source_ip, user_agent, requested_path, http_method, timestamp 
+		 FROM attack_instances 
+		 ORDER BY timestamp DESC 
+		 LIMIT ?`,
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var instances []map[string]interface{}
+	for rows.Next() {
+		var id, patternID int64
+		var sourceIP, userAgent, requestedPath, httpMethod, timestamp string
+
+		if err := rows.Scan(&id, &patternID, &sourceIP, &userAgent, &requestedPath, &httpMethod, &timestamp); err != nil {
+			return nil, err
+		}
+
+		// Get attack type from pattern
+		attackType := "unknown"
+		if patternID > 0 {
+			_ = s.db.QueryRow(
+				`SELECT attack_type FROM attack_patterns WHERE id = ?`,
+				patternID,
+			).Scan(&attackType)
+		}
+
+		instance := map[string]interface{}{
+			"id":              id,
+			"pattern_id":      patternID,
+			"source_ip":       sourceIP,
+			"user_agent":      userAgent,
+			"requested_path":  requestedPath,
+			"http_method":     httpMethod,
+			"attack_type":     attackType,
+			"detection_stage": 3,
+			"timestamp":       timestamp,
+		}
+		instances = append(instances, instance)
+	}
+
+	return instances, rows.Err()
+}
+
+func (s *SQLiteDB) GetAttackerProfiles() ([]map[string]interface{}, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.db.Query(
+		`SELECT id, source_ip, total_requests, attack_types, first_seen, last_seen 
+		 FROM attacker_profiles 
+		 ORDER BY total_requests DESC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var profiles []map[string]interface{}
+	for rows.Next() {
+		var id, totalRequests int64
+		var sourceIP, attackTypes, firstSeen, lastSeen string
+
+		if err := rows.Scan(&id, &sourceIP, &totalRequests, &attackTypes, &firstSeen, &lastSeen); err != nil {
+			return nil, err
+		}
+
+		profile := map[string]interface{}{
+			"id":             id,
+			"source_ip":      sourceIP,
+			"total_requests": totalRequests,
+			"attack_types":   attackTypes,
+			"first_seen":     firstSeen,
+			"last_seen":      lastSeen,
+		}
+		profiles = append(profiles, profile)
+	}
+
+	return profiles, rows.Err()
 }

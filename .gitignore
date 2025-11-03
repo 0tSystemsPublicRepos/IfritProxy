@@ -5,6 +5,7 @@
 .DS_Store
 bin/
 dist/
+vendor/
 
 # IDE
 .vscode/
@@ -13,33 +14,56 @@ dist/
 *.swo
 *~
 .env.local
+*.iml
 
 # Database
 *.db
 *.db-wal
 *.db-shm
+data/
 
 # Logs
 logs/
 *.log
 
 # Dependencies
-vendor/
 go.sum
 
 # Build
 /ifrit
 /ifrit.exe
+/cmd/ifrit-cli/ifrit-cli
+/cmd/ifrit-cli/ifrit-cli.exe
 
-# Config (don't commit secrets)
+# Configuration - DO NOT COMMIT SECRETS
 config/secrets.yaml
 config/*.key
+config/*local*
+.env
+.env.local
+.env.*.local
 
-# MacOS
-.DS_Store
-.AppleDouble
-.LSOverride
+# API Keys and Credentials
+*.pem
+*.key
+*.crt
+*.p12
+credentials.json
 
-# Temp
+# Temporary files
+*.tmp
+*.temp
 tmp/
-temp/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+coverage.out
+*.coverprofile
+
+# Build artifacts
+dist/
+build/
+
