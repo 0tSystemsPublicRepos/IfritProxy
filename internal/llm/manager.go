@@ -88,3 +88,17 @@ func (m *Manager) GetCacheStats() map[string]interface{} {
 func (m *Manager) ClearCache() {
 	m.cache.Clear()
 }
+
+// GetProvider returns a specific provider by name
+func (m *Manager) GetProvider(name string) interface{} {
+	switch name {
+	case "claude", "primary":
+		return m.primary
+	case "fallback":
+		return m.fallback
+	default:
+		return nil
+	}
+}
+
+

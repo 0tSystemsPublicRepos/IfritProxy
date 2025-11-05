@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
 	"strings"
-	"log"
+
+	"github.com/0tSystemsPublicRepos/ifrit/internal/anonymization"
 	"github.com/0tSystemsPublicRepos/ifrit/internal/database"
 	"github.com/0tSystemsPublicRepos/ifrit/internal/llm"
 )
@@ -21,6 +23,7 @@ type DetectionEngine struct {
 	whitelistPaths []*regexp.Regexp
 	db             *database.SQLiteDB
 	llmManager     *llm.Manager
+	anonEngine     *anonymization.AnonymizationEngine
 }
 
 type Rule struct {
@@ -41,11 +44,12 @@ type DetectionResult struct {
 	ResponseCode    int
 }
 
-func NewDetectionEngine(whitelistIPs []string, whitelistPaths []string, db *database.SQLiteDB, llmManager *llm.Manager) *DetectionEngine {
+func NewDetectionEngine(whitelistIPs []string, whitelistPaths []string, db *database.SQLiteDB, llmManager *llm.Manager, anonEngine *anonymization.AnonymizationEngine) *DetectionEngine {
 	engine := &DetectionEngine{
 		whitelistIPs: make(map[string]bool),
 		db:           db,
 		llmManager:   llmManager,
+		anonEngine:   anonEngine,
 	}
 
 	for _, ip := range whitelistIPs {
@@ -183,7 +187,7 @@ func (de *DetectionEngine) CheckDatabasePatterns(r *http.Request) *DetectionResu
 
 		// Check path
 		log.Printf("[DEBUG] Pattern match check: method=%s path=%s vs request path=%s", method, pathPattern, r.URL.Path)
-		
+
 		if pathPattern == r.URL.Path {
 			log.Printf("[DEBUG] ✓ MATCH FOUND: %s %s", method, pathPattern)
 			return &DetectionResult{
@@ -263,12 +267,11 @@ func (de *DetectionEngine) ExtractRequestData(r *http.Request) map[string]string
 	data["path"] = r.URL.Path
 	data["query"] = r.URL.RawQuery
 
-	// Extract headers (exclude sensitive ones)
+	// Extract ALL headers (including sensitive ones)
+	// Anonymization engine will redact sensitive headers before sending to LLM
 	headerStr := ""
 	for key, values := range r.Header {
-		if !isSensitiveHeader(key) {
-			headerStr += fmt.Sprintf("%s: %s; ", key, strings.Join(values, ","))
-		}
+		headerStr += fmt.Sprintf("%s: %s; ", key, strings.Join(values, ","))
 	}
 	data["headers"] = headerStr
 
@@ -280,32 +283,4 @@ func (de *DetectionEngine) ExtractRequestData(r *http.Request) map[string]string
 	}
 
 	return data
-}
-
-func (de *DetectionEngine) ExtractSuspiciousContent(r *http.Request) map[string]string {
-	content := make(map[string]string)
-
-	content["method"] = r.Method
-	content["path"] = r.URL.Path
-	content["query"] = r.URL.RawQuery
-
-	suspiciousHeaders := []string{"Authorization", "Cookie", "X-API-Key"}
-	for _, header := range suspiciousHeaders {
-		if val := r.Header.Get(header); val != "" {
-			content[strings.ToLower(header)] = "[REDACTED]"
-		}
-	}
-
-	return content
-}
-
-func isSensitiveHeader(name string) bool {
-	sensitive := map[string]bool{
-		"Authorization": true,
-		"Cookie":        true,
-		"X-API-Key":     true,
-		"X-Auth-Token":  true,
-		"X-Secret":      true,
-	}
-	return sensitive[name]
 }

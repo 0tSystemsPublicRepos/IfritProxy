@@ -8,11 +8,12 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/0tSystemsPublicRepos/ifrit/internal/execution"
+	"github.com/0tSystemsPublicRepos/ifrit/internal/anonymization"
 	"github.com/0tSystemsPublicRepos/ifrit/internal/api"
 	"github.com/0tSystemsPublicRepos/ifrit/internal/config"
 	"github.com/0tSystemsPublicRepos/ifrit/internal/database"
 	"github.com/0tSystemsPublicRepos/ifrit/internal/detection"
+	"github.com/0tSystemsPublicRepos/ifrit/internal/execution"
 	"github.com/0tSystemsPublicRepos/ifrit/internal/llm"
 	"github.com/0tSystemsPublicRepos/ifrit/internal/logging"
 	"github.com/0tSystemsPublicRepos/ifrit/internal/proxy"
@@ -64,23 +65,42 @@ func main() {
 	)
 	fmt.Printf("✓ LLM Manager initialized (primary: %s)\n", llmManager.GetPrimaryName())
 
-	// Initialize detection engine
+	// Initialize anonymization engine (BEFORE detection engine)
+	fmt.Println("Initializing anonymization engine...")
+	anonEngine := anonymization.NewAnonymizationEngine(
+		cfg.Anonymization.Enabled,
+		cfg.Anonymization.Strategy,
+		cfg.Anonymization.StoreOriginal,
+		cfg.Anonymization.SensitiveHeaders,
+	)
+	fmt.Printf("✓ Anonymization engine initialized (strategy: %s)\n", cfg.Anonymization.Strategy)
+
+	// Initialize detection engine (AFTER anonymization engine)
 	fmt.Println("Initializing detection engine...")
 	detectionEngine := detection.NewDetectionEngine(
 		cfg.Detection.WhitelistIPs,
 		cfg.Detection.WhitelistPaths,
 		db,
 		llmManager,
+		anonEngine,
 	)
 	fmt.Println("✓ Detection engine initialized")
+
+	// Set anonymization engine on Claude provider
+	if provider := llmManager.GetProvider("claude"); provider != nil {
+		if claudeProvider, ok := provider.(*llm.ClaudeProvider); ok {
+			claudeProvider.SetAnonymizationEngine(anonEngine)
+			log.Printf("Claude provider configured with anonymization engine")
+		}
+	}
 
 	// Initialize execution mode handler
 	fmt.Println("Initializing execution mode handler...")
 	modeHandler := execution.NewExecutionModeHandler(&cfg.ExecutionMode, db)
 	fmt.Printf("✓ Execution mode: %s\n", cfg.ExecutionMode.Mode)
 	if modeHandler.IsOnboardingMode() {
-		fmt.Println("  ONBOARDING MODE - All traffic will be whitelisted automatically")
-		fmt.Printf("   Traffic log: %s\n", cfg.ExecutionMode.OnboardingLogFile)
+		fmt.Println(" ⚠️  ONBOARDING MODE - All traffic will be whitelisted automatically")
+		fmt.Printf("  Traffic log: %s\n", cfg.ExecutionMode.OnboardingLogFile)
 	}
 
 	// Initialize reverse proxy

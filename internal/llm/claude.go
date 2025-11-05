@@ -5,15 +5,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"time"
+
+	"github.com/0tSystemsPublicRepos/ifrit/internal/anonymization"
 )
 
 type ClaudeProvider struct {
-	apiKey string
-	model  string
-	client *http.Client
-	cache  *AnalysisCache
+	apiKey              string
+	model               string
+	client              *http.Client
+	cache               *AnalysisCache
+	anonymizationEngine *anonymization.AnonymizationEngine
 }
 
 type claudeMessage struct {
@@ -22,10 +26,10 @@ type claudeMessage struct {
 }
 
 type claudeRequest struct {
-	Model     string           `json:"model"`
-	MaxTokens int              `json:"max_tokens"`
-	Messages  []claudeMessage  `json:"messages"`
-	System    string           `json:"system"`
+	Model     string          `json:"model"`
+	MaxTokens int             `json:"max_tokens"`
+	Messages  []claudeMessage `json:"messages"`
+	System    string          `json:"system"`
 }
 
 type claudeResponse struct {
@@ -47,7 +51,8 @@ func NewClaudeProvider(apiKey, model string) *ClaudeProvider {
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		cache: NewAnalysisCache(24 * time.Hour),
+		cache:               NewAnalysisCache(24 * time.Hour),
+		anonymizationEngine: nil,
 	}
 }
 
@@ -59,15 +64,32 @@ func NewClaudeProviderWithCache(apiKey, model string, cache *AnalysisCache) *Cla
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		cache: cache,
+		cache:               cache,
+		anonymizationEngine: nil,
 	}
+}
+
+// NewClaudeProviderWithAnonymization creates provider with anonymization engine
+func NewClaudeProviderWithAnonymization(apiKey, model string, cache *AnalysisCache, anonEngine *anonymization.AnonymizationEngine) *ClaudeProvider {
+	return &ClaudeProvider{
+		apiKey:              apiKey,
+		model:               model,
+		client:              &http.Client{Timeout: 30 * time.Second},
+		cache:               cache,
+		anonymizationEngine: anonEngine,
+	}
+}
+
+// SetAnonymizationEngine allows setting anonymization engine after creation
+func (c *ClaudeProvider) SetAnonymizationEngine(engine *anonymization.AnonymizationEngine) {
+	c.anonymizationEngine = engine
 }
 
 func (c *ClaudeProvider) AnalyzeRequest(requestData map[string]string) (*AnalysisResult, error) {
 	// Check cache first
 	if cached, found := c.cache.Get(requestData); found {
 		c.cache.Hit(requestData)
-		fmt.Printf("[CACHE HIT] Reusing Claude analysis for %s %s\n", requestData["method"], requestData["path"])
+		log.Printf("[CACHE HIT] Reusing Claude analysis for %s %s\n", requestData["method"], requestData["path"])
 		return cached, nil
 	}
 
@@ -79,8 +101,26 @@ func (c *ClaudeProvider) AnalyzeRequest(requestData map[string]string) (*Analysi
 		}, nil
 	}
 
-	// Build the prompt
-	prompt := c.buildPrompt(requestData)
+	// Stage 1: Anonymize the request data before sending to Claude
+	var anonResult *anonymization.AnonymizationResult
+	if c.anonymizationEngine != nil {
+		anonResult = c.anonymizationEngine.AnonymizeRequestData(requestData)
+		log.Printf("[ANON] Anonymization: %d fields redacted", anonResult.RedactionCount)
+		log.Printf("[ANON] Original: %s %s", requestData["method"], requestData["path"])
+		log.Printf("[ANON] Anonymized: %s", anonResult.AnonymizedRequest)
+	} else {
+		// No anonymization - fallback
+		anonResult = &anonymization.AnonymizationResult{
+			AnonymizedRequest: fmt.Sprintf("%s %s", requestData["method"], requestData["path"]),
+			OriginalRequest:   fmt.Sprintf("%s %s", requestData["method"], requestData["path"]),
+			RedactedFields:    make(map[string]string),
+			RedactionCount:    0,
+		}
+		log.Printf("[ANON] Anonymization engine not configured - sending raw data")
+	}
+
+	// Stage 2: Build prompt with anonymized data
+	prompt := c.buildPrompt(requestData, anonResult)
 
 	// Create the request
 	reqBody := claudeRequest{
@@ -140,13 +180,13 @@ func (c *ClaudeProvider) AnalyzeRequest(requestData map[string]string) (*Analysi
 
 	// Store in cache for future use
 	c.cache.Set(requestData, result)
-	fmt.Printf("[CLAUDE] Analyzed %s %s (confidence: %.2f, now cached)\n", 
-		requestData["method"], requestData["path"], result.Confidence)
+	log.Printf("[CLAUDE] Analyzed %s %s (confidence: %.2f, %d fields redacted, now cached)\n",
+		requestData["method"], requestData["path"], result.Confidence, anonResult.RedactionCount)
 
 	return result, nil
 }
 
-func (c *ClaudeProvider) buildPrompt(requestData map[string]string) string {
+func (c *ClaudeProvider) buildPrompt(requestData map[string]string, anonResult *anonymization.AnonymizationResult) string {
 	return fmt.Sprintf(`
 Analyze this HTTP request for malicious intent:
 
@@ -155,6 +195,10 @@ Path: %s
 Query: %s
 Headers: %s
 Body: %s
+
+Anonymization Status: %d sensitive fields redacted from headers/auth
+Keep in mind that some sensitive authentication headers may be redacted for privacy.
+Focus on attack patterns and suspicious behavior in the visible data.
 
 Determine if this is a malicious request. Respond with ONLY a JSON object (no markdown, no extra text):
 {
@@ -173,6 +217,7 @@ Classifications: reconnaissance, exploitation, post_exploitation, or other
 		requestData["query"],
 		requestData["headers"],
 		requestData["body"],
+		anonResult.RedactionCount,
 	)
 }
 
