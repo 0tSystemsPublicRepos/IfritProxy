@@ -1,236 +1,400 @@
 # IFRIT Proxy
 
-Intelligent LLM-Based Threat Deception and Detection Platform
+**Intelligent Threats Deception**
 
-IFRIT is an intelligent reverse proxy that acts as a deception layer between attackers and production infrastructure. It intercepts malicious requests, analyzes them using Claude or GPT, and serves fabricated responses designed to confuse attackers while gathering threat intelligence.
+IFRIT is an intelligent reverse proxy that transforms every attack into threat intelligence. It sits between attackers and production infrastructure, intercepting malicious requests and making real-time decisions: return fake data to confuse the attacker, or pass legitimate traffic through unchanged.
+
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+
+---
 
 ## Overview
 
-IFRIT operates as an intelligent middleware between the internet and production applications. When a request arrives, IFRIT makes a real-time decision: pass it through to the legitimate backend or serve a fabricated honeypot response.
+IFRIT operates as intelligent middleware between the internet and production applications. When a request arrives, IFRIT makes a real-time decision: pass it through to the legitimate backend or serve a honeypot response.
 
-The decision-making process follows a four-step workflow. First, IFRIT checks if the request matches known exceptions (whitelisted IPs, critical paths). Legitimate traffic passes through unchanged.
+The decision-making process follows a **four-stage pipeline**:
 
-Second, for unknown requests, IFRIT queries its local SQLite database for previously learned attack patterns. If the request signature matches a known malicious pattern, IFRIT generates a realistic fake response and returns it to the attacker.
+1. **Stage 0: Whitelist Check** - Does this IP/path have an exception? → Pass through
+2. **Stage 1: Local Rules** - Does this match obvious attack patterns? → Honeypot
+3. **Stage 2: Database Patterns** - Have we seen this attack before? → Honeypot (cached)
+4. **Stage 3: LLM Analysis** - Is this a novel attack? → Call Claude/GPT → Honeypot
 
-Third, if the request is unknown and learning is enabled, IFRIT sends a sanitized version of the request to Claude or GPT with context about the application stack. The LLM analyzes whether the request represents an attack.
+**Throughout this process:**
+- Sensitive data is anonymized before reaching local/external LLMs (as of current version only support Anthropic Claude)
+- Attack patterns are learned and stored for future reference
+- Attacker profiles are built based on behavior
+- All requests generate detailed logs for threat intelligence
 
-Fourth, if the LLM confirms an attack, IFRIT requests a fabricated payload appropriate to the attack type. For reconnaissance probing .env files, it generates fake credentials. For SQL injection attempts, it returns fake database records. This pattern is saved to the database for future reference.
+Legitimate users access the real backend. Attackers receive deceptive honeypot responses. Your organization profiles every threat while maintaining zero data leakage.
 
-Throughout this process, data anonymization occurs. Sensitive headers (Authorization, Cookie) are redacted before sending to LLMs. User emails and passwords are tokenized. Attack patterns like path traversal and SQL injection syntax are preserved because they are precisely what the LLM needs to detect threats.
+---
 
-All requests, whether legitimate or malicious, pass through but generate different responses. Legitimate users access the real backend. Attackers receive honeypot responses. The organization tracks every probe, learns from it, and profiles the attacker.
+## Key Features
 
-## Quick Start
+### Real-Time Threat Detection
 
-### Installation
+Four-stage pipeline detects attacks without requiring infrastructure changes:
 
-Download the latest release for your platform from the GitHub releases page.
+- **Whitelist exceptions** - Critical paths bypass honeypot
+- **Local rules** - Instant pattern matching (no API calls)
+- **Database patterns** - Learned attacks cached locally (<10ms)
+- **LLM analysis** - Novel threats analyzed by Claude/GPT
+
+### Intelligent Learning
+
+Each attack analyzed becomes a learned pattern:
+
+- First attack: Claude generates honeypot (~3 seconds)
+- Subsequent attacks: Database cache (<10ms)
+- **Result: 90% cost reduction after learning phase**
+
+### Two Detection Modes
+
+**Detection Mode (Default)**
+- Smart threat analysis
+- Optional whitelist for exceptions
+- All other traffic analyzed
+- Use for: Standard deployments
+
+**Allowlist Mode (New)**
+- Only whitelisted IPs/paths allowed
+- Everything else blocked
+- Zero false positives
+- Use for: VPN-only, admin portals, strict zero-trust
+
+See [DETECTION_MODES.md](docs/DETECTION_MODES.md) for detailed comparison.
+
+### Three Execution Modes
+
+**Onboarding Mode**
+- Auto-learns legitimate traffic patterns
+- Zero blocking
+- 7-day default duration
+- Auto-whitelists discovered legitimate paths
+
+**Learning Mode**
+- All traffic passes through
+- Full logging for manual review
+- No blocking
+
+**Normal Mode**
+- Full detection and honeypot responses
+- Real-time learning
+- Production-ready
+
+### Payload Management System
+
+Intelligent honeypot response selection:
+
+- **Stage 1: Database** - Use learned payloads (cached)
+- **Stage 2: LLM** - Claude generates realistic responses
+- **Stage 3: Config** - Fallback to configured defaults
+- **Stage 4: Fallback** - Generic error if nothing matches
+ 
+
+### Data Anonymization
+
+Sensitive data is redacted before sending to external LLMs:
+
+**Redacted:**
+- Authentication tokens and credentials
+- Session cookies
+- API keys
+- Email addresses
+- Personal information
+
+**Preserved (needed for detection):**
+- HTTP method and path
+- Attack patterns (SQL injection syntax, path traversal)
+- Content-Type and User-Agent
+
+**Compliance:**
+- GDPR: PII anonymized before external API calls
+- HIPAA: PHI protected
+- PCI-DSS: Credit card data redacted
+- CCPA: User data minimization
+
+### CLI Management Tool
+
+Complete command-line interface:
 ```bash
-# Linux (x86_64)
-wget https://github.com/0tSystemsPublicRepos/ifrit/releases/download/v1.0.0/ifrit-linux-amd64
-chmod +x ifrit-linux-amd64
-./ifrit-linux-amd64
+# View attacks
+./ifrit-cli attack list
+./ifrit-cli attack view 1
+./ifrit-cli attack stats
+./ifrit-cli attack by-ip 192.168.1.1
+./ifrit-cli attack by-path /api/users
 
-# macOS (Apple Silicon)
-wget https://github.com/0tSystemsPublicRepos/ifrit/releases/download/v1.0.0/ifrit-darwin-arm64
-chmod +x ifrit-darwin-arm64
-./ifrit-darwin-arm64
+# Manage patterns
+./ifrit-cli pattern list
+./ifrit-cli pattern view 1
+./ifrit-cli pattern add sql_injection "1 OR 1=1"
+./ifrit-cli pattern remove 1
 
-# Build from source
-git clone https://github.com/0tSystemsPublicRepos/ifrit.git
-cd ifrit
-go build -o ifrit ./cmd/ifrit
-./ifrit
+# View attacker profiles
+./ifrit-cli attacker list
+./ifrit-cli attacker view 1
+./ifrit-cli attacker search 192.168.1.1
+
+# Manage exceptions (whitelist)
+./ifrit-cli exception list
+./ifrit-cli exception add 10.0.0.1 /health
+./ifrit-cli exception remove 1
+
+# Database operations
+./ifrit-cli db stats
+./ifrit-cli db schema
 ```
 
-### Configuration
+### REST API
 
-Create a YAML configuration file specifying your backend address and LLM provider credentials:
-```yaml
-server:
-  listen_addr: ":8080"
-  proxy_target: "http://localhost:3000"
-  api_listen_addr: ":8443"
-
-database:
-  type: "sqlite"
-  path: "data/ifrit.db"
-
-llm:
-  primary: "claude"
-  claude:
-    api_key: "YOUR_CLAUDE_API_KEY"
-    model: "claude-3-sonnet"
-```
-
-No additional dependencies or infrastructure changes are required. IFRIT works immediately with existing applications.
-
-### Dashboard
-
-The web dashboard is accessible at http://localhost:8080/dashboard after IFRIT starts. It displays real-time attack feeds, attacker profiles, detected patterns, and system health metrics.
-
-## Installation Video
-
-[Terminal installation and setup demonstration]
-
-## Key Capabilities
-
-IFRIT provides real-time threat detection without requiring infrastructure changes. It deploys as a reverse proxy in front of existing applications, requiring only network routing modifications. No changes to backend code are necessary.
-
-The platform learns attack patterns continuously. Each request analyzed by an LLM becomes a learned pattern that improves detection speed and reduces costs. After the first week, most requests are answered from the local database without querying expensive LLM APIs.
-
-IFRIT builds profiles of attackers based on their behavior. It tracks unique source IPs, the attacks they attempt, the frequency of their probes, and whether they return for follow-up attacks after receiving fake data. This creates a timeline of attacker progression and sophistication estimation.
-
-Data privacy is built in. Sensitive data is anonymized before being sent to commercial LLMs. Organizations can control exactly what data leaves their infrastructure. No credentials, personal information, or proprietary details need to reach external APIs.
-
-The platform generates compliance evidence. Attack logs provide auditable proof of active threat detection. Honeypot responses with timestamps demonstrate rapid response to malicious activity. Attacker profiles show security-conscious infrastructure hardening.
-
-IFRIT integrates with existing security tools. It exports data in standard formats, sends alerts to Wazuh or SIEM systems, and provides REST APIs for custom integrations. It works alongside WAFs, IDS systems, and threat intelligence platforms.
-
-## How IFRIT Works
-
-IFRIT operates as a four-stage detection pipeline that processes each incoming request:
-
-Stage one checks if the request matches known exceptions. Whitelisted IPs and critical paths bypass honeypot responses and pass through to the backend unchanged.
-
-Stage two queries the local SQLite database for previously learned attack patterns. If the request signature matches a known malicious pattern, IFRIT generates an appropriate honeypot response instantly without external API calls.
-
-Stage three evaluates local rules based on configuration. Standard attack signatures like SQL injection attempts, path traversal, and common probes are matched against patterns.
-
-Stage four, if the request remains unclassified and learning is enabled, sends a sanitized request to Claude or GPT for analysis. The LLM determines if the request is malicious and recommends an appropriate response.
-
-The detection pipeline is ordered for efficiency. Most legitimate traffic exits at stage one. Known attacks are caught at stage two or three. Only novel requests reach the expensive LLM analysis at stage four. This reduces costs dramatically while maintaining comprehensive threat detection.
-
-[Architecture Diagram]
-
-## CLI Management Tool
-
-IFRIT includes a comprehensive command-line interface for managing all database entities. View, add, remove, and modify entities directly from the terminal without manual database access.
-
-Attack management displays recent attacks, views details, shows statistics, and filters by IP address or attack type. Pattern management lists all learned attack signatures and allows creation of new patterns.
-
-Attacker profile management displays profiles for each detected source IP, showing total requests, attack types, first seen and last seen timestamps, and whether the attacker returned after receiving honeypot data.
-
-Exception management creates whitelisted rules for IPs and paths that should bypass honeypot detection. Database operations provide statistics, schema information, and maintenance functions.
+JSON API for integrations:
 ```bash
-ifrit-cli attack list
-ifrit-cli attack stats
-ifrit-cli pattern list
-ifrit-cli attacker view 1
-ifrit-cli exception add 10.0.0.1 /health
-ifrit-cli db stats
+# Get recent attacks
+curl http://localhost:8443/api/attacks
+
+# Get attacker profiles
+curl http://localhost:8443/api/attackers
+
+# Get learned patterns
+curl http://localhost:8443/api/patterns
+
+# Get cache statistics
+curl http://localhost:8443/api/cache/stats
+
+# Clear cache
+curl -X POST http://localhost:8443/api/cache/clear
 ```
 
-See the CLI documentation for the complete command reference.
+### Threat Intelligence
+
+Actionable intelligence from attack analysis:
+
+- **Attack classification** - Type, severity, technique
+- **Attacker profiles** - IP, first seen, last seen, total requests
+- **Pattern database** - Learned signatures with confidence scores
+- **Timeline tracking** - Attacker progression and tool evolution
+
+---
+
+## How It Works
+
+### Request Flow
+```
+Incoming Request
+    ↓
+[Stage 0] Whitelist Check
+├─ Is IP whitelisted? → ALLOW ✓
+├─ Is path whitelisted? → ALLOW ✓
+└─ Continue to Stage 1
+    ↓
+[Stage 1] Local Rules
+├─ Matches obvious attack signature? → HONEYPOT ✓
+└─ Continue to Stage 2
+    ↓
+[Stage 2] Database Patterns
+├─ Matches learned pattern? → HONEYPOT ✓
+└─ Continue to Stage 3
+    ↓
+[Stage 3] LLM Analysis (POST/PUT/DELETE only)
+├─ Claude/GPT confirms attack? → HONEYPOT ✓
+└─ Not an attack
+    ↓
+[Forward] Legitimate Traffic
+└─ Pass to backend ✓
+```
+
+### Payload Selection
+
+When an attack is detected, the response is selected by priority:
+```
+Attack Detected (e.g., sql_injection)
+    ↓
+[1] Database: Any stored payload? → Use it ✓
+    ↓
+[2] LLM: Generate dynamic? → Claude creates response ✓
+    ↓
+[3] Config: Attack type in defaults? → Use it ✓
+    ↓
+[4] Fallback: Generic error → 500 response ✓
+```
+
+### Learning Process
+```
+Hour 1: 100 attacks, 40 unique types
+├─ Detect → 40 Claude calls → $0.12 cost
+├─ Store patterns in DB
+└─ Honeypot responses cached
+
+Hour 2: 100 attacks, same 40 types
+├─ Database pattern matches → 0 Claude calls
+├─ Cached responses used
+└─ $0.00 cost (100% savings!)
+```
+
+---
 
 ## Architecture
 
-IFRIT consists of four primary components working in concert: the reverse proxy engine, the detection engine, the learning engine, and the data layer.
+### Components
 
-The reverse proxy engine handles all network traffic. It listens on a configured port (typically 8080/8443), accepts incoming HTTP/HTTPS requests, and either forwards them to backend applications or returns honeypot responses. This component is written in Go for performance and operates at near-native speeds.
+**Reverse Proxy Engine**
+- Listens on configured port (8080/8443)
+- Routes traffic to backend or honeypot
+- Written in Go for high performance
+- TLS/HTTPS support
 
-The detection engine makes the critical pass-through-or-honeypot decision. It queries the local database for known patterns, evaluates local rules based on configuration, and when necessary, contacts the LLM API for advanced analysis. This engine applies data anonymization before sending requests to external services.
+**Detection Engine**
+- Four-stage pipeline decision logic
+- Whitelist exception checking
+- Local rule pattern matching
+- LLM integration for novel threats
+- Data anonymization before external APIs
 
-The learning engine captures new threats and stores them for future reference. When an LLM confirms an attack, the engine stores the attack signature, classification, confidence level, and an appropriate fabricated response template. It tracks how many times each pattern appears and whether attackers return after receiving fake data.
+**Payload Management**
+- Intelligent response selection
+- Database caching of learned payloads
+- LLM-based dynamic generation
+- Config-based defaults
+- Graceful fallback
 
-The data layer manages SQLite persistence. It stores exceptions (whitelisted IPs/paths), learned attack patterns, individual attack instances, attacker profiles, and LLM analysis results. The schema is optimized for fast pattern matching and detailed threat analysis.
+**Learning Engine**
+- Captures attack signatures
+- Stores learned patterns in database
+- Tracks confidence scores
+- Builds attacker profiles
 
-Additionally, IFRIT includes a read-only web dashboard that queries the data layer via a secured REST API. The dashboard shows attack feeds, attacker profiles, pattern statistics, and system health. Authentication uses token-based validation against a file-based key store.
+**Data Layer**
+- SQLite database (local, no external deps)
+- Stores exceptions, patterns, attacks, profiles
+- Fast pattern matching optimized queries
 
-[System Architecture Diagram]
+**REST API & CLI**
+- Query interface for all data
+- Pattern management
+- Exception/whitelist management
+- Statistics and analytics
+
+---
 
 ## Configuration
 
-IFRIT is configured entirely through YAML files. No code changes are required to modify behavior. Configuration covers proxy targets and listening addresses, LLM provider selection (Claude or GPT), database paths, alert thresholds, anonymization rules, and honeypot payload templates.
+All configuration through JSON (`config/default.json`). No code changes needed.
 
-Anonymization rules are highly configurable. Administrators specify which headers are always redacted (Authorization, Cookie), which patterns warrant tokenization (email addresses, user IDs), and which patterns must never be redacted because they represent the attack itself (SQL injection syntax, path traversal strings).
+### Detection Modes
 
-Payload templates can be customized by attack type. When reconnaissance probes for .env files, a specific payload template is used. SQL injection attempts trigger a different payload. This allows organizations to craft realistic responses that match their actual infrastructure patterns.
+**Detection Mode (Default)**
+```json
+{
+  "detection": {
+    "mode": "detection",
+    "enable_local_rules": true,
+    "enable_llm": true,
+    "whitelist_ips": [],
+    "whitelist_paths": []
+  }
+}
+```
 
-Exception rules allow legitimate traffic to bypass the honeypot system entirely. Internal monitoring systems, security scanners, and critical APIs can be whitelisted by IP address or URL pattern.
+**Allowlist Mode (Strict)**
+```json
+{
+  "detection": {
+    "mode": "allowlist",
+    "whitelist_ips": ["192.168.1.100", "10.0.0.0/8"],
+    "whitelist_paths": ["/health", "/status"]
+  }
+}
+```
 
-## Threat Intelligence Output
+### Execution Modes
+```json
+{
+  "execution_mode": {
+    "mode": "onboarding",
+    "onboarding_auto_whitelist": true,
+    "onboarding_duration_days": 7,
+    "onboarding_log_file": "./logs/onboarding_traffic.log"
+  }
+}
+```
 
-IFRIT generates three primary intelligence outputs: immediate threat alerts, pattern databases, and attacker profiles.
+Options: `onboarding`, `learning`, `normal`
 
-Immediate alerts occur when sophisticated attacks are detected. These can be sent to Wazuh, SIEM systems, Slack, or email. Alert rules are configurable by attack type, severity, source geography, or targeted endpoint.
+### Payload Management
+```json
+{
+  "payload_management": {
+    "generate_dynamic_payload": true,
+    "dynamic_llm_cache_ttl": 86400,
+    "default_responses": {
+      "sql_injection": {
+        "content": {"error": "Forbidden"},
+        "status_code": 403
+      }
+    }
+  }
+}
+```
 
-Pattern databases grow over time. Each attack pattern stored is an investment in future detection speed and cost reduction. After several weeks of operation, most common attacks are detected instantly from the local database without querying LLMs.
+### Anonymization
+```json
+{
+  "anonymization": {
+    "enabled": true,
+    "strategy": "hybrid",
+    "store_original": true,
+    "sensitive_headers": [
+      "Authorization",
+      "Cookie",
+      "X-API-Key"
+    ]
+  }
+}
+```
 
-Attacker profiles accumulate intelligence about each source IP address. IFRIT tracks first and last seen timestamps, total request counts, successful probe outcomes, attack types attempted, and whether the attacker returned after receiving fake data. This creates a timeline and sophistication profile for each threat actor.
-
-## Deployment
-
-IFRIT is deployed as a standalone Go binary or Docker container. It sits between the internet and production applications, typically replacing the direct IP in DNS or being placed behind a load balancer.
-
-For small deployments, a single IFRIT instance handles all traffic. For high-traffic environments, multiple instances share a centralized SQLite database or commercial database backend (available in commercial edition).
-
-The tool requires minimal configuration. A YAML file specifies the backend application address, LLM provider credentials, and anonymization rules. No external dependencies exist beyond Go runtime libraries.
-
-## Use Cases
-
-Security teams use IFRIT to understand their threat landscape. By analyzing attacker behavior, they discover which attack vectors are most common, what tools are being used, and whether sophisticated actors are targeting their infrastructure.
-
-Incident responders use IFRIT data to correlate attacks. If an attacker probes multiple targets in a network, IFRIT helps identify the same actor across different systems.
-
-Compliance teams use IFRIT evidence to satisfy audit requirements. The detailed logs show active threat detection and rapid response, strengthening security posture documentation.
-
-Threat intelligence analysts use IFRIT patterns to understand emerging attack techniques. Over months of operation, a detailed dataset of reconnaissance patterns, exploitation attempts, and post-exploitation probes accumulates.
-
-## Limitations
-
-IFRIT is most effective against reconnaissance and initial exploitation phases. Once an attacker gains valid credentials or performs a zero-day exploit, the deception layer cannot protect against them.
-
-The system relies on accurate threat classification from LLMs. Misclassification can result in legitimate requests being honeypotted or malicious requests passing through. Conservative defaults and tuning are required.
-
-IFRIT does not replace network intrusion detection or endpoint protection. It is a complementary tool that adds an intelligent deception layer to existing security infrastructure.
-
-The threat intelligence generated is most valuable when aggregated across multiple instances and organizations. A single organization learns from its own attackers, but broader patterns require coordination with the security community.
-
-## Features
-
-Open Source Edition includes reverse proxy with HTTPS/TLS support, real-time threat detection with Claude or GPT, self-learning attack patterns with SQLite database, data anonymization before external API calls, read-only web dashboard with token authentication, REST API for integrations, full YAML configuration, and Docker and systemd deployment.
-
-Commercial Edition includes everything in the open source edition plus multi-database support (MySQL, PostgreSQL), advanced analytics and reporting, multiple user management with RBAC, email and SMS alerts via Twilio, Wazuh and SIEM integrations, compliance reporting (GDPR, HIPAA, PCI-DSS), database encryption at rest, key rotation and HSM support, dedicated support and SLAs, SaaS or self-hosted options, and white-label capabilities.
-
-For commercial licensing, contact sales@0t.systems
-
-## Getting Started
-
-The open source edition is available on GitHub. Deployment takes minutes: download the binary, create a configuration file specifying your backend address and LLM credentials, and start the proxy. The read-only dashboard is immediately accessible for monitoring.
-
-The commercial edition adds multi-database support, advanced analytics, comprehensive SIEM integrations, compliance reporting, and dedicated support.
-
-For organizations prioritizing privacy and control, the open source edition provides a complete threat detection platform. For enterprises requiring full integration with existing security infrastructure, the commercial edition provides additional capabilities and support.
-
-## Contributing
-
-IFRIT is developed openly on GitHub under the Apache License 2.0. Community contributions are welcome, including new LLM providers, SIEM integrations, payload templates, and detection improvements.
-
-See CONTRIBUTING.md for guidelines on how to contribute code, documentation, or threat patterns.
-
-Threat patterns discovered by the community are shared through the project repository, continuously improving detection capabilities for all users.
+---
 
 ## Documentation
 
-Complete documentation is available in the docs directory: INSTALLATION.md for setup instructions, ARCHITECTURE.md for technical deep dives, CONFIGURATION.md for all configuration options, CLI.md for command reference, and FEATURES.md for open source vs commercial comparison.
+- **[START_HERE.md](docs/START_HERE.md)** - Quick navigation guide
+- **[INSTALLATION.md](docs/INSTALLATION.md)** - Detailed setup instructions
+- **[DETECTION_MODES.md](docs/DETECTION_MODES.md)** - Detection vs Allowlist modes
+- **[PAYLOAD_MANAGEMENT.md](docs/PAYLOAD_MANAGEMENT.md)** - Honeypot response system
+- **[ANONYMIZATION_TESTING.md](docs/ANONYMIZATION_TESTING.md)** - Data privacy details
+- **[FEATURES.md](docs/FEATURES.md)** - Complete feature list
+
+
+---
+
+## Contributing
+
+IFRIT is developed openly on GitHub under Apache License 2.0.
+
+**Contributions welcome:**
+- New LLM providers (GPT, Llama, etc.)
+- SIEM integrations (Wazuh, Splunk, ELK)
+- Payload templates for new attack types
+- Detection improvements and pattern refinements
+- Documentation and examples
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+---
 
 ## License
 
-IFRIT Proxy is licensed under the Apache License 2.0. See LICENSE file for details.
+IFRIT Proxy is licensed under [Apache License 2.0](LICENSE).
+
+---
 
 ## Support
 
-For security vulnerabilities, email security@0t.systems
+**Security Issues + Bug reports + General inquiries**
+- Email: [ifrit@0t.systems](mailto:ifrit@0t.systems)
 
-For issues and feature requests, use GitHub Issues
+---
 
-For commercial inquiries, contact sales@0t.systems
+## Acknowledgments
 
-## Links
-
-Website: https://ifrit.0t.systems
-GitHub: https://github.com/0tSystemsPublicRepos/ifrit
-Releases: https://github.com/0tSystemsPublicRepos/ifrit/releases
-Email: security@0t.systems
-
+Built with Go, SQLite, Claude AI, and the security community's collective threat intelligence.
