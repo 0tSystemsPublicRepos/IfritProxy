@@ -1,7 +1,6 @@
 package payload
 
 import (
-	"database/sql"
 	"log"
 )
 

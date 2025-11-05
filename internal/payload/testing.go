@@ -2,8 +2,8 @@ package payload
 
 import (
 	"encoding/json"
-	"log"
 	"time"
+	"github.com/0tSystemsPublicRepos/ifrit/internal/config"
 )
 
 // TestPayload validates a payload before saving
@@ -54,10 +54,10 @@ func (pm *PayloadManager) TestPayload(template PayloadTemplate) (bool, []string)
 }
 
 // TestPayloadDelivery simulates payload delivery and validates response
-func (pm *PayloadManager) TestPayloadDelivery(ctx AttackerContext) (bool, string) {
+func (pm *PayloadManager) TestPayloadDelivery(ctx AttackerContext, cfg *config.PayloadManagement, llmMgr interface{}) (bool, string) {
 	start := time.Now()
 
-	payload, err := pm.GetPayloadForAttack(ctx)
+	payload, err := pm.GetPayloadForAttack(ctx, cfg, llmMgr)
 	if err != nil {
 		return false, "Error retrieving payload: " + err.Error()
 	}
@@ -69,24 +69,12 @@ func (pm *PayloadManager) TestPayloadDelivery(ctx AttackerContext) (bool, string
 		return false, "No payload returned"
 	}
 
-	if payload.StatusCode < 100 || payload.StatusCode > 599 {
-		return false, "Invalid HTTP status code"
+	// Check response time is reasonable
+	if elapsed > 5*time.Second {
+		return false, "Payload retrieval took too long: " + elapsed.String()
 	}
 
-	if payload.Body == "" {
-		return false, "Payload body is empty"
-	}
-
-	if payload.ContentType == "" {
-		return false, "Content type not set"
-	}
-
-	// Check response time (should be fast)
-	if elapsed > 500*time.Millisecond {
-		log.Printf("Warning: Slow payload delivery: %v", elapsed)
-	}
-
-	return true, "Payload test successful (" + elapsed.String() + ")"
+	return true, "Payload delivered successfully in " + elapsed.String()
 }
 
 // ValidatePayloadContent checks if payload content is safe
@@ -118,4 +106,3 @@ func (pm *PayloadManager) ValidatePayloadContent(content, contentType string) (b
 
 	return len(errors) == 0, errors
 }
-

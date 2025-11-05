@@ -16,6 +16,7 @@ import (
 	"github.com/0tSystemsPublicRepos/ifrit/internal/execution"
 	"github.com/0tSystemsPublicRepos/ifrit/internal/llm"
 	"github.com/0tSystemsPublicRepos/ifrit/internal/logging"
+	"github.com/0tSystemsPublicRepos/ifrit/internal/payload"
 	"github.com/0tSystemsPublicRepos/ifrit/internal/proxy"
 )
 
@@ -86,6 +87,12 @@ func main() {
 	)
 	fmt.Println("✓ Detection engine initialized")
 
+	// Initialize payload manager
+	fmt.Println("Initializing payload manager...")
+	payloadManager := payload.NewPayloadManager(db.GetDB())
+	payloadManager.SetLLMManager(llmManager)
+	fmt.Println("✓ Payload manager initialized")
+
 	// Set anonymization engine on Claude provider
 	if provider := llmManager.GetProvider("claude"); provider != nil {
 		if claudeProvider, ok := provider.(*llm.ClaudeProvider); ok {
@@ -99,8 +106,8 @@ func main() {
 	modeHandler := execution.NewExecutionModeHandler(&cfg.ExecutionMode, db)
 	fmt.Printf("✓ Execution mode: %s\n", cfg.ExecutionMode.Mode)
 	if modeHandler.IsOnboardingMode() {
-		fmt.Println(" ⚠️  ONBOARDING MODE - All traffic will be whitelisted automatically")
-		fmt.Printf("  Traffic log: %s\n", cfg.ExecutionMode.OnboardingLogFile)
+		fmt.Println("  ⚠️  ONBOARDING MODE - All traffic will be whitelisted automatically")
+		fmt.Printf("   Traffic log: %s\n", cfg.ExecutionMode.OnboardingLogFile)
 	}
 
 	// Initialize reverse proxy
@@ -166,10 +173,28 @@ func main() {
 			}
 
 			// Normal/Learning mode: return honeypot
-			logging.Attack(clientIP, r.Method, r.URL.Path, result.AttackType, "Stage 2: Local Rules")
+			logging.Attack(clientIP, r.Method, r.URL.Path, result.AttackType, "Stage 1: Local Rules")
 			db.StoreAttackInstance(0, clientIP, "", r.URL.Path, r.Method)
-			w.WriteHeader(http.StatusForbidden)
-			w.Write([]byte(`{"error": "Forbidden"}`))
+
+			// Get payload response
+			payloadResp, err := payloadManager.GetPayloadForAttack(
+				payload.AttackerContext{
+					SourceIP:       clientIP,
+					AttackType:     result.AttackType,
+					Classification: result.Classification,
+					Path:           r.URL.Path,
+				},
+				&cfg.PayloadManagement,
+				llmManager,
+			)
+			if err != nil || payloadResp == nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte(`{"error": "Internal server error"}`))
+				return
+			}
+			w.Header().Set("Content-Type", payloadResp.ContentType)
+			w.WriteHeader(payloadResp.StatusCode)
+			w.Write([]byte(payloadResp.Body))
 			return
 		}
 
@@ -192,10 +217,28 @@ func main() {
 			}
 
 			// Normal/Learning mode: return honeypot
-			logging.Attack(clientIP, r.Method, r.URL.Path, result.AttackType, "Stage 3: Database Patterns")
+			logging.Attack(clientIP, r.Method, r.URL.Path, result.AttackType, "Stage 2: Database Patterns")
 			db.StoreAttackInstance(0, clientIP, "", r.URL.Path, r.Method)
-			w.WriteHeader(http.StatusForbidden)
-			w.Write([]byte(result.PayloadTemplate))
+
+			// Get payload response
+			payloadResp, err := payloadManager.GetPayloadForAttack(
+				payload.AttackerContext{
+					SourceIP:       clientIP,
+					AttackType:     result.AttackType,
+					Classification: result.Classification,
+					Path:           r.URL.Path,
+				},
+				&cfg.PayloadManagement,
+				llmManager,
+			)
+			if err != nil || payloadResp == nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte(`{"error": "Internal server error"}`))
+				return
+			}
+			w.Header().Set("Content-Type", payloadResp.ContentType)
+			w.WriteHeader(payloadResp.StatusCode)
+			w.Write([]byte(payloadResp.Body))
 			return
 		}
 
@@ -219,10 +262,28 @@ func main() {
 				}
 
 				// Normal/Learning mode: return honeypot
-				logging.Attack(clientIP, r.Method, r.URL.Path, result.AttackType, "Stage 4: LLM Analysis")
+				logging.Attack(clientIP, r.Method, r.URL.Path, result.AttackType, "Stage 3: LLM Analysis")
 				db.StoreAttackInstance(0, clientIP, "", r.URL.Path, r.Method)
-				w.WriteHeader(http.StatusForbidden)
-				w.Write([]byte(result.PayloadTemplate))
+
+				// Get payload response
+				payloadResp, err := payloadManager.GetPayloadForAttack(
+					payload.AttackerContext{
+						SourceIP:       clientIP,
+						AttackType:     result.AttackType,
+						Classification: result.Classification,
+						Path:           r.URL.Path,
+					},
+					&cfg.PayloadManagement,
+					llmManager,
+				)
+				if err != nil || payloadResp == nil {
+					w.WriteHeader(http.StatusInternalServerError)
+					w.Write([]byte(`{"error": "Internal server error"}`))
+					return
+				}
+				w.Header().Set("Content-Type", payloadResp.ContentType)
+				w.WriteHeader(payloadResp.StatusCode)
+				w.Write([]byte(payloadResp.Body))
 				return
 			}
 		}

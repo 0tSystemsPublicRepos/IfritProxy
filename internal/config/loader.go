@@ -9,6 +9,12 @@ import (
 	"strings"
 )
 
+type PayloadManagement struct {
+	GenerateDynamicPayload bool                   `json:"generate_dynamic_payload"`
+	DynamicLLMCacheTTL     int                    `json:"dynamic_llm_cache_ttl"`
+	DefaultResponses       map[string]interface{} `json:"default_responses"`
+}
+
 type ExecutionModeConfig struct {
 	Mode                    string `json:"mode"`
 	OnboardingAutoWhitelist bool   `json:"onboarding_auto_whitelist"`
@@ -17,13 +23,14 @@ type ExecutionModeConfig struct {
 }
 
 type Config struct {
-	Server        ServerConfig        `json:"server"`
-	Database      DatabaseConfig      `json:"database"`
-	LLM           LLMConfig           `json:"llm"`
-	Detection     DetectionConfig     `json:"detection"`
-	ExecutionMode ExecutionModeConfig `json:"execution_mode"`
-	Anonymization AnonymizationConfig `json:"anonymization"`
-	System        SystemConfig        `json:"system"`
+	Server            ServerConfig        `json:"server"`
+	Database          DatabaseConfig      `json:"database"`
+	LLM               LLMConfig           `json:"llm"`
+	Detection         DetectionConfig     `json:"detection"`
+	ExecutionMode     ExecutionModeConfig `json:"execution_mode"`
+	Anonymization     AnonymizationConfig `json:"anonymization"`
+	PayloadManagement PayloadManagement   `json:"payload_management"`
+	System            SystemConfig        `json:"system"`
 }
 
 type ServerConfig struct {
@@ -207,6 +214,28 @@ func getDefaults() *Config {
 				"X-API-Key",
 			},
 		},
+		PayloadManagement: PayloadManagement{
+			GenerateDynamicPayload: false,
+			DynamicLLMCacheTTL:     86400,
+			DefaultResponses: map[string]interface{}{
+				"reconnaissance": map[string]interface{}{
+					"content":     map[string]interface{}{"error": "Not found"},
+					"status_code": 404,
+				},
+				"sql_injection": map[string]interface{}{
+					"content":     map[string]interface{}{"error": "Forbidden"},
+					"status_code": 403,
+				},
+				"xss": map[string]interface{}{
+					"content":     map[string]interface{}{"error": "Invalid input", "message": "XSS prevention enabled"},
+					"status_code": 400,
+				},
+				"fallback": map[string]interface{}{
+					"content":     map[string]interface{}{"error": "Internal server error"},
+					"status_code": 500,
+				},
+			},
+		},
 		System: SystemConfig{
 			HomeDir:  "./",
 			LogDir:   "./logs",
@@ -254,6 +283,17 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.System.LogLevel == "" {
 		cfg.System.LogLevel = "info"
+	}
+	if cfg.PayloadManagement.DynamicLLMCacheTTL == 0 {
+		cfg.PayloadManagement.DynamicLLMCacheTTL = 86400
+	}
+	if cfg.PayloadManagement.DefaultResponses == nil {
+		cfg.PayloadManagement.DefaultResponses = map[string]interface{}{
+			"fallback": map[string]interface{}{
+				"content":     map[string]interface{}{"error": "Internal server error"},
+				"status_code": 500,
+			},
+		}
 	}
 
 	// Do NOT set default whitelist IPs if config explicitly set empty array

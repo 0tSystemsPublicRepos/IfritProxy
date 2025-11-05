@@ -3,13 +3,18 @@ package payload
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log"
 	"regexp"
 	"strings"
+
+	"github.com/0tSystemsPublicRepos/ifrit/internal/config"
+	"github.com/0tSystemsPublicRepos/ifrit/internal/llm"
 )
 
 type PayloadManager struct {
 	db *sql.DB
+	llmMgr interface{} // Will be *llm.Manager but avoiding circular import
 }
 
 // NewPayloadManager creates a new payload manager instance
@@ -55,32 +60,45 @@ type AttackerContext struct {
 }
 
 // GetPayloadForAttack selects the best payload for the given attack
-func (pm *PayloadManager) GetPayloadForAttack(ctx AttackerContext) (*PayloadResponse, error) {
-	// Try to get conditional payload first (highest priority)
-	payload, err := pm.getConditionalPayload(ctx)
+// Priority: Database → Dynamic (LLM) → Config Default → Fallback
+func (pm *PayloadManager) GetPayloadForAttack(ctx AttackerContext, cfg *config.PayloadManagement, llmMgr interface{}) (*PayloadResponse, error) {
+	// Stage 1: Try to get payload from database (fixed payloads)
+	payload, err := pm.getPayloadByAttackType(ctx.AttackType)
 	if err == nil && payload != nil {
+		log.Printf("[PAYLOAD] Using database payload for %s (status: %d)", ctx.AttackType, payload.StatusCode)
 		return payload, nil
 	}
 
-	// Fall back to attack-type based payload
-	payload, err = pm.getPayloadByAttackType(ctx.AttackType)
-	if err == nil && payload != nil {
-		return payload, nil
+	// Stage 2: Generate dynamic payload if enabled
+	if cfg != nil && cfg.GenerateDynamicPayload && llmMgr != nil {
+		log.Printf("[PAYLOAD] Generating dynamic payload for %s via LLM", ctx.AttackType)
+		payload, err := pm.getPayloadFromLLM(ctx.AttackType)
+		if err == nil && payload != nil {
+			log.Printf("[PAYLOAD] Using LLM-generated payload for %s (status: %d)", ctx.AttackType, payload.StatusCode)
+			return payload, nil
+		}
+		log.Printf("[PAYLOAD] LLM generation failed: %v, falling back to config", err)
 	}
 
-	// Fall back to generic payload
-	payload, err = pm.getGenericPayload()
-	if err == nil && payload != nil {
-		return payload, nil
+	// Stage 3: Use config default response
+	if cfg != nil && cfg.DefaultResponses != nil {
+		payload, err := pm.getPayloadFromConfig(ctx.AttackType, cfg)
+		if err == nil && payload != nil {
+			log.Printf("[PAYLOAD] Using config default for %s (status: %d)", ctx.AttackType, payload.StatusCode)
+			return payload, nil
+		}
 	}
 
-	log.Printf("Warning: No payload found for attack type %s", ctx.AttackType)
-	return &PayloadResponse{
-		StatusCode:  403,
+	// Stage 4: Fallback to generic error
+	payload = &PayloadResponse{
+		StatusCode:  500,
 		ContentType: "application/json",
-		Body:        `{"error": "Forbidden"}`,
+		Body:        `{"error": "Internal server error"}`,
 		Headers:     make(map[string]string),
-	}, nil
+		DelayMS:     50,
+	}
+	log.Printf("[PAYLOAD] Using fallback for %s (status: %d)", ctx.AttackType, payload.StatusCode)
+	return payload, nil
 }
 
 // getConditionalPayload finds payload matching specific conditions
@@ -436,5 +454,111 @@ type PayloadCondition struct {
 	Type     string
 	Value    string
 	Operator string
+}
+
+// getPayloadFromConfig retrieves default response from config
+func (pm *PayloadManager) getPayloadFromConfig(attackType string, cfg *config.PayloadManagement) (*PayloadResponse, error) {
+	if cfg.DefaultResponses == nil {
+		return nil, nil
+	}
+
+	// Try to get specific attack type response
+	responseConfig, ok := cfg.DefaultResponses[attackType]
+	if ok {
+		return pm.parseConfigResponse(responseConfig)
+	}
+
+	// If not found, try fallback
+	fallbackConfig, ok := cfg.DefaultResponses["fallback"]
+	if ok {
+		return pm.parseConfigResponse(fallbackConfig)
+	}
+
+	return nil, nil
+}
+
+// parseConfigResponse parses a config response into PayloadResponse
+func (pm *PayloadManager) parseConfigResponse(respConfig interface{}) (*PayloadResponse, error) {
+	respMap, ok := respConfig.(map[string]interface{})
+	if !ok {
+		return nil, nil
+	}
+
+	content := respMap["content"]
+	statusCode := int(respMap["status_code"].(float64))
+
+	// Convert content to JSON string
+	contentJSON, _ := json.Marshal(content)
+
+	return &PayloadResponse{
+		StatusCode:  statusCode,
+		ContentType: "application/json",
+		Body:        string(contentJSON),
+		Headers:     make(map[string]string),
+		DelayMS:     50,
+	}, nil
+}
+
+// getPayloadFromLLM generates payload using LLM (Claude)
+func (pm *PayloadManager) getPayloadFromLLM(attackType string) (*PayloadResponse, error) {
+	if pm.llmMgr == nil {
+		return nil, fmt.Errorf("LLM manager not configured")
+	}
+
+	// Cast to LLM Manager
+	llmManager, ok := pm.llmMgr.(*llm.Manager)
+	if !ok {
+		return nil, fmt.Errorf("invalid LLM manager type")
+	}
+
+	// Generate fake payload using LLM
+	payload, err := llmManager.GeneratePayload(attackType)
+	if err != nil {
+		return nil, fmt.Errorf("LLM generation error: %w", err)
+	}
+
+	if payload == nil {
+		return nil, fmt.Errorf("LLM returned empty payload")
+	}
+
+	// Convert payload to JSON
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal payload: %w", err)
+	}
+
+	// Determine appropriate status code for attack type
+	statusCode := pm.getStatusCodeForAttackType(attackType)
+
+	return &PayloadResponse{
+		StatusCode:  statusCode,
+		ContentType: "application/json",
+		Body:        string(payloadJSON),
+		Headers:     make(map[string]string),
+		DelayMS:     50,
+	}, nil
+}
+
+// getStatusCodeForAttackType returns appropriate HTTP status for attack type
+func (pm *PayloadManager) getStatusCodeForAttackType(attackType string) int {
+	statusCodes := map[string]int{
+		"reconnaissance":      404,
+		"sql_injection":       403,
+		"xss":                 400,
+		"command_injection":   403,
+		"credential_stuffing": 401,
+		"path_traversal":      403,
+	}
+
+	if code, ok := statusCodes[attackType]; ok {
+		return code
+	}
+
+	return 500 // Default
+}
+
+// SetLLMManager sets the LLM manager for dynamic payload generation
+func (pm *PayloadManager) SetLLMManager(llmMgr interface{}) {
+	pm.llmMgr = llmMgr
 }
 
