@@ -1,0 +1,45 @@
+{
+  "server": {
+    "listen_addr": ":8080",
+    "proxy_target": "http://localhost:80",
+    "api_listen_addr": ":8443",
+    "tls": {
+      "enabled": true,
+      "cert_file": "/app/config/certs/server.crt",
+      "key_file": "/app/config/certs/server.key"
+    }
+  },
+  "database": {
+    "type": "sqlite",
+    "path": "./data/ifrit.db"
+  },
+  "llm": {
+    "primary": "claude",
+    "claude": {
+      "api_key": "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",
+      "model": "claude-3-5-haiku-20241022"
+    },
+    "gpt": {
+      "api_key": "",
+      "model": "gpt-4o-mini"
+    }
+  },
+  "detection": {
+    "enable_local_rules": true,
+    "enable_llm": true,
+    "llm_only_on": ["POST", "PUT", "DELETE"],
+    "whitelist_ips": [],
+    "whitelist_paths": []
+  },
+  "anonymization": {
+    "enabled": true,
+    "strategy": "hybrid",
+    "store_original": true,
+    "sensitive_headers": ["Authorization", "Cookie", "X-API-Key", "X-Auth-Token"]
+  },
+  "system": {
+    "home_dir": "./",
+    "log_dir": "./logs",
+    "log_level": "info"
+  }
+}
