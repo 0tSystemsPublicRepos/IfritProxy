@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/0tSystemsPublicRepos/ifrit/internal/execution"
 	"github.com/0tSystemsPublicRepos/ifrit/internal/api"
 	"github.com/0tSystemsPublicRepos/ifrit/internal/config"
 	"github.com/0tSystemsPublicRepos/ifrit/internal/database"
@@ -73,6 +74,15 @@ func main() {
 	)
 	fmt.Println("✓ Detection engine initialized")
 
+	// Initialize execution mode handler
+	fmt.Println("Initializing execution mode handler...")
+	modeHandler := execution.NewExecutionModeHandler(&cfg.ExecutionMode, db)
+	fmt.Printf("✓ Execution mode: %s\n", cfg.ExecutionMode.Mode)
+	if modeHandler.IsOnboardingMode() {
+		fmt.Println("  ONBOARDING MODE - All traffic will be whitelisted automatically")
+		fmt.Printf("   Traffic log: %s\n", cfg.ExecutionMode.OnboardingLogFile)
+	}
+
 	// Initialize reverse proxy
 	fmt.Println("Initializing reverse proxy...")
 	reverseProxy, err := proxy.NewReverseProxy(cfg.Server.ProxyTarget)
@@ -99,9 +109,13 @@ func main() {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// Check exceptions first
+		// DEBUG: Log every incoming request
 		clientIP := proxy.GetClientIP(r)
+		log.Printf("[REQUEST] %s %s from %s", r.Method, r.URL.Path, clientIP)
+
+		// Check exceptions first
 		if detectionEngine.CheckExceptions(r, clientIP) {
+			log.Printf("[EXCEPTION] Request whitelisted: %s %s", r.Method, r.URL.Path)
 			logging.Debug("Request from whitelisted IP: %s", clientIP)
 			resp, err := reverseProxy.ForwardRequest(r)
 			if err != nil {
@@ -116,6 +130,22 @@ func main() {
 		// Stage 1: Check local rules
 		result := detectionEngine.CheckLocalRules(r)
 		if result != nil && result.IsAttack {
+			log.Printf("[STAGE1] Attack detected: %s", result.AttackType)
+			// In onboarding mode, auto-whitelist this path instead of blocking
+			if modeHandler.IsOnboardingMode() {
+				log.Printf("[ONBOARDING] Auto-whitelisting path: %s %s", r.Method, r.URL.Path)
+				modeHandler.HandleOnboardingRequest(r.Method, r.URL.Path)
+				resp, err := reverseProxy.ForwardRequest(r)
+				if err != nil {
+					http.Error(w, "Bad Gateway", http.StatusBadGateway)
+					return
+				}
+				defer resp.Body.Close()
+				reverseProxy.CopyResponse(w, resp)
+				return
+			}
+
+			// Normal/Learning mode: return honeypot
 			logging.Attack(clientIP, r.Method, r.URL.Path, result.AttackType, "Stage 2: Local Rules")
 			db.StoreAttackInstance(0, clientIP, "", r.URL.Path, r.Method)
 			w.WriteHeader(http.StatusForbidden)
@@ -126,6 +156,22 @@ func main() {
 		// Stage 2: Check database patterns
 		result = detectionEngine.CheckDatabasePatterns(r)
 		if result != nil && result.IsAttack {
+			log.Printf("[STAGE2] Attack detected: %s", result.AttackType)
+			// In onboarding mode, auto-whitelist this path instead of blocking
+			if modeHandler.IsOnboardingMode() {
+				log.Printf("[ONBOARDING] Auto-whitelisting path: %s %s", r.Method, r.URL.Path)
+				modeHandler.HandleOnboardingRequest(r.Method, r.URL.Path)
+				resp, err := reverseProxy.ForwardRequest(r)
+				if err != nil {
+					http.Error(w, "Bad Gateway", http.StatusBadGateway)
+					return
+				}
+				defer resp.Body.Close()
+				reverseProxy.CopyResponse(w, resp)
+				return
+			}
+
+			// Normal/Learning mode: return honeypot
 			logging.Attack(clientIP, r.Method, r.URL.Path, result.AttackType, "Stage 3: Database Patterns")
 			db.StoreAttackInstance(0, clientIP, "", r.URL.Path, r.Method)
 			w.WriteHeader(http.StatusForbidden)
@@ -137,6 +183,22 @@ func main() {
 		if contains(cfg.Detection.LLMOnlyOn, r.Method) && cfg.Detection.EnableLLM {
 			result = detectionEngine.CheckLLMAnalysis(r)
 			if result != nil && result.IsAttack {
+				log.Printf("[STAGE3] Attack detected: %s", result.AttackType)
+				// In onboarding mode, auto-whitelist this path instead of blocking
+				if modeHandler.IsOnboardingMode() {
+					log.Printf("[ONBOARDING] Auto-whitelisting path: %s %s", r.Method, r.URL.Path)
+					modeHandler.HandleOnboardingRequest(r.Method, r.URL.Path)
+					resp, err := reverseProxy.ForwardRequest(r)
+					if err != nil {
+						http.Error(w, "Bad Gateway", http.StatusBadGateway)
+						return
+					}
+					defer resp.Body.Close()
+					reverseProxy.CopyResponse(w, resp)
+					return
+				}
+
+				// Normal/Learning mode: return honeypot
 				logging.Attack(clientIP, r.Method, r.URL.Path, result.AttackType, "Stage 4: LLM Analysis")
 				db.StoreAttackInstance(0, clientIP, "", r.URL.Path, r.Method)
 				w.WriteHeader(http.StatusForbidden)
@@ -146,6 +208,7 @@ func main() {
 		}
 
 		// Not an attack, forward to backend
+		log.Printf("[LEGITIMATE] Forwarding to backend: %s %s", r.Method, r.URL.Path)
 		resp, err := reverseProxy.ForwardRequest(r)
 		if err != nil {
 			http.Error(w, "Bad Gateway", http.StatusBadGateway)

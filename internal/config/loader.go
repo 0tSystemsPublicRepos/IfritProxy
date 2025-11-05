@@ -9,11 +9,19 @@ import (
 	"strings"
 )
 
+type ExecutionModeConfig struct {
+	Mode                    string `json:"mode"`
+	OnboardingAutoWhitelist bool   `json:"onboarding_auto_whitelist"`
+	OnboardingDurationDays  int    `json:"onboarding_duration_days"`
+	OnboardingLogFile       string `json:"onboarding_log_file"`
+}
+
 type Config struct {
 	Server        ServerConfig        `json:"server"`
 	Database      DatabaseConfig      `json:"database"`
 	LLM           LLMConfig           `json:"llm"`
 	Detection     DetectionConfig     `json:"detection"`
+	ExecutionMode ExecutionModeConfig `json:"execution_mode"`
 	Anonymization AnonymizationConfig `json:"anonymization"`
 	System        SystemConfig        `json:"system"`
 }
@@ -181,10 +189,13 @@ func getDefaults() *Config {
 			EnableLocalRules: true,
 			EnableLLM:        true,
 			LLMOnlyOn:        []string{"POST", "PUT", "DELETE"},
-			WhitelistIPs: []string{
-				"127.0.0.1",
-				"::1",
-			},
+			WhitelistIPs:     []string{},
+		},
+		ExecutionMode: ExecutionModeConfig{
+			Mode:                    "onboarding",
+			OnboardingAutoWhitelist: true,
+			OnboardingDurationDays:  7,
+			OnboardingLogFile:       "./logs/onboarding_traffic.log",
 		},
 		Anonymization: AnonymizationConfig{
 			Enabled:       true,
@@ -229,11 +240,26 @@ func applyDefaults(cfg *Config) {
 	if cfg.LLM.Claude.Model == "" {
 		cfg.LLM.Claude.Model = "claude-3-5-sonnet"
 	}
+	if cfg.ExecutionMode.Mode == "" {
+		cfg.ExecutionMode.Mode = "onboarding"
+	}
+	if cfg.ExecutionMode.OnboardingDurationDays == 0 {
+		cfg.ExecutionMode.OnboardingDurationDays = 7
+	}
+	if cfg.ExecutionMode.OnboardingLogFile == "" {
+		cfg.ExecutionMode.OnboardingLogFile = "./logs/onboarding_traffic.log"
+	}
 	if cfg.System.HomeDir == "" {
 		cfg.System.HomeDir = "./"
 	}
 	if cfg.System.LogLevel == "" {
 		cfg.System.LogLevel = "info"
+	}
+
+	// Do NOT set default whitelist IPs if config explicitly set empty array
+	// This allows onboarding mode to work properly
+	if cfg.Detection.WhitelistIPs == nil {
+		cfg.Detection.WhitelistIPs = []string{}
 	}
 
 	// Create directories

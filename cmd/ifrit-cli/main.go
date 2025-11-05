@@ -256,8 +256,8 @@ func attacksByPath(cmd *cobra.Command, args []string) {
 // ============== PATTERN COMMANDS ==============
 
 func listPatterns(cmd *cobra.Command, args []string) {
-	rows, err := db.Query(`
-		SELECT id, attack_type, attack_signature, times_seen, last_seen
+rows, err := db.Query(`
+		SELECT id, attack_type, http_method, path_pattern, times_seen, last_seen
 		FROM attack_patterns ORDER BY times_seen DESC
 	`)
 	if err != nil {
@@ -267,18 +267,19 @@ func listPatterns(cmd *cobra.Command, args []string) {
 	defer rows.Close()
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tTYPE\tSIGNATURE\tSEEN\tLAST SEEN")
+	fmt.Fprintln(w, "ID\tTYPE\tMETHOD\tPATTERN\tSEEN\tLAST SEEN")
 
 	count := 0
 	for rows.Next() {
 		var id, timesSeen int
-		var attackType, signature, lastSeen string
-		rows.Scan(&id, &attackType, &signature, &timesSeen, &lastSeen)
-		fmt.Fprintf(w, "%d\t%s\t%s\t%d\t%s\n", id, attackType, signature, timesSeen, lastSeen)
+		var attackType, method, pattern, lastSeen string
+		rows.Scan(&id, &attackType, &method, &pattern, &timesSeen, &lastSeen)
+		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%d\t%s\n", id, attackType, method, pattern, timesSeen, lastSeen)
 		count++
 	}
 	w.Flush()
 	fmt.Printf("\nTotal: %d patterns\n", count)
+
 }
 
 func viewPattern(cmd *cobra.Command, args []string) {

@@ -16,7 +16,7 @@
   "llm": {
     "primary": "claude",
     "claude": {
-      "api_key": "_COPY_YOUR_ANTHROPIC_API_KEY_HERE_R1EZraFiNnuY92Qkie8zJAQYbUxiX-9hEcIkgg-VuABJXkcNGqHtv_3-ZTDEC-tvoZRoGKQ1TA-DvbdpAAA",
+      "api_key": "sk-PUT_YOUR_KEY_HERE",
       "model": "claude-3-5-haiku-20241022"
     },
     "gpt": {
