@@ -98,11 +98,12 @@ func createAllTables(db *sql.DB) error {
 			name: "exceptions",
 			schema: `CREATE TABLE IF NOT EXISTS exceptions (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				ip_address TEXT,
-				path TEXT,
+				ip_address TEXT NOT NULL,
+				path TEXT NOT NULL,
 				reason TEXT,
 				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-				enabled BOOLEAN DEFAULT 1
+				enabled BOOLEAN DEFAULT 1,
+				UNIQUE(ip_address, path)
 			)`,
 		},
 		{

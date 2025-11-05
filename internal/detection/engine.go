@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
-
+	"log"
 	"github.com/0tSystemsPublicRepos/ifrit/internal/database"
 	"github.com/0tSystemsPublicRepos/ifrit/internal/llm"
 )
@@ -98,14 +98,34 @@ func (de *DetectionEngine) initLocalRules() {
 }
 
 func (de *DetectionEngine) CheckExceptions(r *http.Request, clientIP string) bool {
+	// Check if this IP is whitelisted
 	if de.whitelistIPs[clientIP] {
 		return true
 	}
 
+	// Check path-based whitelist patterns
 	for _, pathRegex := range de.whitelistPaths {
 		if pathRegex.MatchString(r.URL.Path) {
 			return true
 		}
+	}
+
+	// Check database exceptions table
+	// Query for either specific IP or wildcard ("*")
+	var exists bool
+	err := de.db.GetDB().QueryRow(
+		`SELECT EXISTS(
+			SELECT 1 FROM exceptions 
+			WHERE enabled = 1 
+			AND path = ? 
+			AND (ip_address = ? OR ip_address = '*')
+		)`,
+		r.URL.Path,
+		clientIP,
+	).Scan(&exists)
+
+	if err == nil && exists {
+		return true
 	}
 
 	return false
@@ -145,21 +165,30 @@ func (de *DetectionEngine) CheckLocalRules(r *http.Request) *DetectionResult {
 func (de *DetectionEngine) CheckDatabasePatterns(r *http.Request) *DetectionResult {
 	patterns, err := de.db.GetAllPatterns()
 	if err != nil {
+		log.Printf("[DEBUG] Error getting patterns: %v", err)
 		return nil
 	}
+
+	log.Printf("[DEBUG] Checking %d patterns for %s %s", len(patterns), r.Method, r.URL.Path)
 
 	for _, pattern := range patterns {
 		pathPattern := pattern["path_pattern"].(string)
 		method := pattern["http_method"].(string)
+		attackType := pattern["attack_type"].(string)
 
+		// Check method first
 		if method != r.Method {
 			continue
 		}
 
+		// Check path
+		log.Printf("[DEBUG] Pattern match check: method=%s path=%s vs request path=%s", method, pathPattern, r.URL.Path)
+		
 		if pathPattern == r.URL.Path {
+			log.Printf("[DEBUG] ✓ MATCH FOUND: %s %s", method, pathPattern)
 			return &DetectionResult{
 				IsAttack:        true,
-				AttackType:      pattern["attack_type"].(string),
+				AttackType:      attackType,
 				Classification:  pattern["attack_classification"].(string),
 				Confidence:      pattern["confidence"].(float64),
 				Signature:       de.GenerateSignature(r),
@@ -170,6 +199,7 @@ func (de *DetectionEngine) CheckDatabasePatterns(r *http.Request) *DetectionResu
 		}
 	}
 
+	log.Printf("[DEBUG] ✗ No pattern match found for %s %s", r.Method, r.URL.Path)
 	return nil
 }
 

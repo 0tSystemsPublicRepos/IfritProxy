@@ -93,11 +93,12 @@ func (s *SQLiteDB) createTables() error {
 		)`,
 		`CREATE TABLE IF NOT EXISTS exceptions (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			ip_address TEXT,
-			path TEXT,
+			ip_address TEXT NOT NULL,
+			path TEXT NOT NULL,
 			reason TEXT,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-			enabled BOOLEAN DEFAULT 1
+			enabled BOOLEAN DEFAULT 1,
+			UNIQUE(ip_address, path)
 		)`,
 	}
 
@@ -236,11 +237,11 @@ func (s *SQLiteDB) SeedPatternsFromFile(filePath string) error {
 }
 
 func (s *SQLiteDB) GetAllPatterns() ([]map[string]interface{}, error) {
-	s.mu.RLock()
+s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	rows, err := s.db.Query(
-		`SELECT id, attack_type, attack_classification, http_method, path_pattern, payload_template, response_code, claude_confidence
+		`SELECT id, attack_type, attack_classification, http_method, path_pattern, COALESCE(payload_template, ''), response_code, claude_confidence
 		 FROM attack_patterns`,
 	)
 	if err != nil {
@@ -272,6 +273,7 @@ func (s *SQLiteDB) GetAllPatterns() ([]map[string]interface{}, error) {
 	}
 
 	return patterns, rows.Err()
+	
 }
 
 func (s *SQLiteDB) GetAttackInstances(limit int) ([]map[string]interface{}, error) {
@@ -361,3 +363,26 @@ func (s *SQLiteDB) GetAttackerProfiles() ([]map[string]interface{}, error) {
 
 	return profiles, rows.Err()
 }
+// AddException adds a path pattern to the exceptions whitelist
+// Use "*" for ip_address to match any IP for that path
+func (s *SQLiteDB) AddException(ipAddress, path, reason string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, err := s.db.Exec(
+		`INSERT INTO exceptions (ip_address, path, reason, enabled)
+		 VALUES (?, ?, ?, 1)
+		 ON CONFLICT(ip_address, path) DO NOTHING`,
+		ipAddress,
+		path,
+		reason,
+	)
+	return err
+}
+
+// GetDB returns the underlying *sql.DB connection
+func (s *SQLiteDB) GetDB() *sql.DB {
+	return s.db
+}
+
+
