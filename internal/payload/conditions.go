@@ -30,7 +30,7 @@ func (pm *PayloadManager) RemoveCondition(conditionID int) error {
 // GetConditionsForPayload retrieves all conditions for a payload
 func (pm *PayloadManager) GetConditionsForPayload(payloadID int) ([]PayloadCondition, error) {
 	query := `
-		SELECT condition_type, condition_value, operator
+		SELECT id, condition_type, condition_value, operator
 		FROM payload_conditions
 		WHERE payload_template_id = ?
 		ORDER BY id ASC
@@ -45,17 +45,19 @@ func (pm *PayloadManager) GetConditionsForPayload(payloadID int) ([]PayloadCondi
 	var conditions []PayloadCondition
 
 	for rows.Next() {
+		var id int64
 		var conditionType, conditionValue, operator string
 
-		if err := rows.Scan(&conditionType, &conditionValue, &operator); err != nil {
+		if err := rows.Scan(&id, &conditionType, &conditionValue, &operator); err != nil {
 			log.Printf("Error scanning condition: %v", err)
 			continue
 		}
 
 		conditions = append(conditions, PayloadCondition{
-			Type:     conditionType,
-			Value:    conditionValue,
-			Operator: operator,
+			ID:             id,
+			ConditionType:  conditionType,
+			ConditionValue: conditionValue,
+			Operator:       operator,
 		})
 	}
 
@@ -73,4 +75,3 @@ func (pm *PayloadManager) UpdateCondition(conditionID int, conditionType, condit
 	_, err := pm.db.Exec(query, conditionType, conditionValue, operator, conditionID)
 	return err
 }
-

@@ -7,12 +7,12 @@ type Provider interface {
 }
 
 type AnalysisResult struct {
-	IsAttack       bool
-	AttackType     string
-	Classification string
-	Confidence     float64
-	Reasoning      string
-	TokensUsed     int
+	IsAttack       bool    `json:"is_attack"`
+	AttackType     string  `json:"attack_type"`
+	Classification string  `json:"classification"`
+	Confidence     float64 `json:"confidence"`
+	Reasoning      string  `json:"reason"`
+	TokensUsed     int     `json:"tokens_used"`
 }
 
 type ProviderConfig struct {

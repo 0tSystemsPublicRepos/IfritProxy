@@ -1,5 +1,10 @@
 # Payload Management System
 
+**Version:** 0.1.1  
+**Last Updated:** November 7, 2025
+
+---
+
 ## Overview
 
 Payload Management controls what fake responses IFRIT sends when attacks are detected. Instead of blocking or passing through attacks, IFRIT returns deceptive honeypot responses to confuse attackers while gathering intelligence.
@@ -13,7 +18,6 @@ The system intelligently selects responses using a four-stage fallback mechanism
 ### The Four-Stage Selection Process
 
 When an attack is detected, IFRIT selects the response in this order:
-
 ```
 Attack Detected (e.g., SQL injection on /api/search)
     ↓
@@ -27,7 +31,7 @@ Stage 3: Config Defaults?
     └─ Attack type defined in config? → Return it ✓
     
 Stage 4: Fallback
-    └─ Return generic 500 error (fallback error/response can be customized as well)
+    └─ Return generic 500 error (customizable)
 ```
 
 ### Stage 1: Database Patterns (Learning)
@@ -121,8 +125,7 @@ Pre-configured fallback responses in `config/default.json` for known attack type
 
 ### Stage 4: Fallback
 
-Generic error when no match found at any stage, the fallback message can be set in the config.
-
+Generic error when no match found at any stage. The fallback message can be customized in config.
 ```
 HTTP/1.1 500 Internal Server Error
 {"error": "Internal server error"}
@@ -135,7 +138,6 @@ HTTP/1.1 500 Internal Server Error
 ### Basic Setup (No Dynamic Generation)
 
 Minimal configuration - fast but less realistic:
-
 ```json
 {
   "payload_management": {
@@ -154,7 +156,6 @@ Minimal configuration - fast but less realistic:
 ### Recommended Setup (With Dynamic Generation)
 
 Example configuration - realistic and cost-efficient:
-
 ```json
 {
   "payload_management": {
@@ -216,21 +217,22 @@ Example configuration - realistic and cost-efficient:
 ## Database Schema
 
 Payloads are stored in the `attack_patterns` table:
-
 ```sql
 CREATE TABLE attack_patterns (
   id INTEGER PRIMARY KEY,
-  attack_type TEXT,              -- e.g., "sql_injection", "xss"
-  attack_signature TEXT,         -- Pattern that triggered detection
-  http_method TEXT,              -- GET, POST, etc.
-  path_pattern TEXT,             -- /api/users, /login, etc.
-  payload_template TEXT,         -- JSON response to send (stored here!)
-  response_code INTEGER,         -- HTTP status code (200-599)
-  times_seen INTEGER,            -- How many times detected
-  first_seen TIMESTAMP,          -- When first detected
-  last_seen TIMESTAMP,           -- Most recent detection
-  created_by TEXT,               -- "claude", "config", "manual"
-  claude_confidence FLOAT        -- LLM confidence (0.0-1.0)
+  app_id TEXT,                 -- Multi-app support
+  attack_type TEXT,            -- e.g., "sql_injection", "xss"
+  attack_signature TEXT,       -- Pattern that triggered detection
+  http_method TEXT,            -- GET, POST, etc.
+  path_pattern TEXT,           -- /api/users, /login, etc.
+  attack_classification TEXT,  -- Classification of attack
+  payload_template TEXT,       -- JSON response to send (stored here!)
+  response_code INTEGER,       -- HTTP status code (200-599)
+  confidence FLOAT,            -- LLM confidence score
+  times_seen INTEGER,          -- How many times detected
+  first_seen TIMESTAMP,        -- When first detected
+  last_seen TIMESTAMP,         -- Most recent detection
+  created_by TEXT,             -- "claude", "config", "manual"
 );
 ```
 
@@ -248,7 +250,6 @@ CREATE TABLE attack_patterns (
 IFRIT caches payloads to reduce API calls and response time.
 
 ### How Caching Works
-
 ```
 Attack Detected
     ↓
@@ -265,7 +266,7 @@ Check database for pattern match
 
 **Without caching:**
 - 100 attacks = 100 Claude API calls
-- Cost: ~$0.30
+- Cost: ~$0.10
 
 **With caching:**
 - Hour 1: 100 attacks, 30 unique patterns → 30 API calls ($0.09)
@@ -308,14 +309,13 @@ List all learned attack patterns:
 
 Output:
 ```
-ID  TYPE              METHOD  PATTERN         SEEN  LAST SEEN
-1   sql_injection     POST    /api/users      12    2025-11-05 21:38:15
-2   credential_stuff  POST    /api/login      45    2025-11-05 21:39:00
-3   xss               POST    /api/comment    3     2025-11-05 21:35:22
+ID  APP ID  TYPE              METHOD  PATTERN         SEEN  LAST SEEN
+1   default sql_injection     POST    /api/users      12    2025-11-05 21:38:15
+2   default credential_stuff  POST    /api/login      45    2025-11-05 21:39:00
+3   default xss               POST    /api/comment    3     2025-11-05 21:35:22
 ```
 
 ### View Specific Pattern (With Payload)
-
 ```bash
 ./ifrit-cli pattern view 1
 ```
@@ -324,24 +324,24 @@ Output:
 ```
 Pattern #1
 ==========
-Type:              sql_injection
-Classification:    injection
-Signature:         1 UNION SELECT
-HTTP Method:       POST
-Path Pattern:      /api/users
-Response Code:     403
-Times Seen:        12
-Created By:        claude
-Claude Confidence: 0.95
-First Seen:        2025-11-05 21:36:42
-Last Seen:         2025-11-05 21:38:15
-Payload Template:  {"data": [{"id": 1, "email": "admin@internal.local", "role": "admin"}, {"id": 2, "email": "user@internal.local", "role": "user"}], "total": 2}
+App ID:             default
+Type:               sql_injection
+Classification:     injection
+Signature:          1 UNION SELECT
+HTTP Method:        POST
+Path Pattern:       /api/users
+Response Code:      403
+Times Seen:         12
+Created By:         claude
+Confidence:         0.95
+First Seen:         2025-11-05 21:36:42
+Last Seen:          2025-11-05 21:38:15
+Payload Template:   {"data": [{"id": 1, "email": "admin@internal.local", "role": "admin"}, {"id": 2, "email": "user@internal.local", "role": "user"}], "total": 2}
 ```
 
 ### Add Manual Payload
 
 For advanced users who want to manually define payloads:
-
 ```bash
 ./ifrit-cli pattern add sql_injection "1 OR 1=1"
 ```
@@ -351,7 +351,6 @@ This creates a new pattern (payload comes from config defaults).
 ### Remove Payload
 
 Delete a learned pattern:
-
 ```bash
 ./ifrit-cli pattern remove 1
 ```
@@ -360,23 +359,24 @@ Delete a learned pattern:
 
 ## Limitations
 
-### Current (MVP)
+### Current (MVP 0.1.1)
 
-✅ Four-stage fallback working correctly  
-✅ LLM generates realistic payloads  
-✅ Automatic caching and learning  
-✅ Config-based customization  
-✅ CLI management of patterns  
-✅ Cost optimization via caching  
+ Four-stage fallback working correctly  
+ LLM generates realistic payloads  
+ Automatic caching and learning  
+ Config-based customization  
+ CLI management of patterns  
+ Cost optimization via caching  
+ Multi-app support (separate payloads per app)
 
 ### Not Implemented (Future)
 
-❌ Conditional payloads based on attacker profile  
-❌ Payload randomization per request  
-❌ Response time simulation  
-❌ Per-request payload override  
-❌ Encrypted payload storage  
-❌ Payload versioning/rollback  
+ Conditional payloads based on attacker profile  
+ Payload randomization per request  
+ Response time simulation  
+ Per-request payload override  
+ Encrypted payload storage  
+ Payload versioning/rollback  
 
 ### Known Constraints
 
@@ -405,7 +405,7 @@ Delete a learned pattern:
 - Attack type (detected)
 - Content-Type, User-Agent
 
-**Claude does NOT receive:**
+**Unless configured otherwise, Claude does NOT receive:**
 - Credentials
 - Personal information
 - Real user data
@@ -413,12 +413,12 @@ Delete a learned pattern:
 
 ### Payload Safety
 
-- Generated payloads are **fake/honeypot only**
+- Altough very realistic, generated payloads are **fake/deceptive only**
 - No real data exposed to attackers
 - Responses designed to deceive, not harm
 - No executable code in responses
 - All payloads are JSON (safe for parsing)
-
+- Complex intel collection payloads might not work unless rendered by the attacker on his browser (e.g html/js code). IFRT DOES NOT INJECT code to be executed on attacker's machine outside of this context.
 ---
 
 ## Troubleshooting
@@ -440,7 +440,7 @@ Delete a learned pattern:
 
 **Symptoms:**
 ```
-[PAYLOAD] LLM payload generation not yet implemented
+[PAYLOAD] LLM payload generation failed
 ```
 
 **Cause:** LLM manager not configured or API key missing
@@ -449,6 +449,7 @@ Delete a learned pattern:
 1. Verify Claude API key in config
 2. Check `generate_dynamic_payload: true`
 3. Verify LLM manager initialized in logs
+4. Test API key manually
 
 ### Issue: Slow initial responses
 
@@ -499,10 +500,80 @@ rm data/ifrit.db
 ### For Cost Optimization
 - Keep `generate_dynamic_payload: true` - caching saves 95% of API calls
 - Monitor cache via `/api/cache/stats`
-- Periodically clean old patterns: `./ifrit-cli pattern list | filter old`
+- Periodically clean old patterns: `./ifrit-cli pattern list`
 
 ### For Maximum Realism
 - Enable dynamic generation
 - Allow sufficient cache TTL (86400+ seconds)
 - Add comprehensive defaults for common attack types
-- Monitor LLMs (if used) confidence scores
+- Monitor LLM (if used) confidence scores
+
+---
+
+## Advanced Usage
+
+### Multi-App Payload Management
+
+Each app can have its own payloads:
+```bash
+# View patterns for app1
+./ifrit-cli pattern list --app app1
+
+# View patterns for app2
+./ifrit-cli pattern list --app app2
+```
+
+Payloads are stored separately per `app_id` in the database.
+
+### Payload Customization
+
+Edit config.json to customize default responses:
+```json
+{
+  "payload_management": {
+    "default_responses": {
+      "sql_injection": {
+        "content": {
+          "status": "error",
+          "message": "Query execution failed",
+          "code": "DB_ERROR"
+        },
+        "status_code": 400
+      },
+      "custom_attack": {
+        "content": {"custom": "payload"},
+        "status_code": 403
+      }
+    }
+  }
+}
+```
+
+### Response Formats
+
+Payloads can be:
+- **JSON objects:** `{"error": "...", "data": ...}`
+- **JSON arrays:** `[{...}, {...}]`
+- **HTML strings:** `"<html>...</html>"`
+- **Plain text:** `"Error occurred"`
+
+---
+
+## Summary
+
+**Payload Management Status:** ✅ Production Ready
+
+**Key Features:**
+- Intelligent 4-stage selection
+- Automatic caching (90% cost reduction)
+- LLM-generated realistic responses
+- Config-based customization
+- CLI management interface
+- Multi-app support
+
+**Recommendation:** Always enable `generate_dynamic_payload: true` for maximum effectiveness and cost efficiency.
+
+---
+
+**Last Updated:** November 7, 2025  
+**Version:** 0.1.1

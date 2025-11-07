@@ -42,35 +42,34 @@ func (e *ExecutionModeHandler) IsLearningMode() bool {
 
 // HandleOnboardingRequest handles request in onboarding mode
 // If auto-whitelist is enabled, adds the request path to exceptions
-func (e *ExecutionModeHandler) HandleOnboardingRequest(method, path string) error {
-	log.Printf("[ONBOARDING] Processing: %s %s", method, path)
+func (e *ExecutionModeHandler) HandleOnboardingRequest(method, path, appID string) error {
+	log.Printf("[ONBOARDING] app_id=%s | Processing: %s %s", appID, method, path)
 	if !e.IsOnboardingMode() {
-		log.Printf("[ONBOARDING] Not in onboarding mode, skipping")
+		log.Printf("[ONBOARDING] app_id=%s | Not in onboarding mode, skipping", appID)
 		return nil
 	}
 
 	if !e.config.OnboardingAutoWhitelist {
-		log.Printf("[ONBOARDING] Auto-whitelist disabled, skipping")
+		log.Printf("[ONBOARDING] app_id=%s | Auto-whitelist disabled, skipping", appID)
 		return nil
 	}
 
 	// Add path to exceptions table to whitelist for future requests
-	// Using path (method + URL) instead of IP since IPs change
-	err := e.addPathToExceptions(method, path)
+	// Using "*" for IP to match any IP for that path
+	err := e.addPathToExceptions(appID, method, path)
 	if err != nil {
-		log.Printf("Error adding path to exceptions: %v", err)
+		log.Printf("Error adding path to exceptions for app_id=%s: %v", appID, err)
 		return err
 	}
 
 	// Log to onboarding traffic file
-	e.logOnboardingTraffic(method, path)
+	e.logOnboardingTraffic(appID, method, path)
 
-	return nil	
+	return nil
 }
 
-// addPathToExceptions adds path (method + URL) to exceptions whitelist in database
-// This way, the exception applies to the request type, not specific IPs
-func (e *ExecutionModeHandler) addPathToExceptions(method, path string) error {
+// addPathToExceptions adds path to exceptions whitelist in database
+func (e *ExecutionModeHandler) addPathToExceptions(appID, method, path string) error {
 	if e.db == nil {
 		return fmt.Errorf("database not initialized")
 	}
@@ -78,38 +77,42 @@ func (e *ExecutionModeHandler) addPathToExceptions(method, path string) error {
 	// Create a unique identifier for this request pattern (method + path)
 	// This exception applies to ANY IP making this request
 	reason := fmt.Sprintf("auto-added in onboarding mode - %s", time.Now().Format("2006-01-02 15:04:05"))
-	
-	err := e.db.AddException("*", path, reason)
+
+	err := e.db.AddException(appID, "*", path, reason)
 	if err != nil {
-		log.Printf("Error adding path to exceptions: %v", err)
+		log.Printf("Error adding path to exceptions for app_id=%s: %v", appID, err)
 		return err
 	}
 
-	log.Printf("[ONBOARDING] Auto-whitelisted path in DB: %s %s", method, path)
+	log.Printf("[ONBOARDING] app_id=%s | Auto-whitelisted path in DB: %s %s", appID, method, path)
 	return nil
 }
 
 // logOnboardingTraffic logs request to onboarding traffic file
-func (e *ExecutionModeHandler) logOnboardingTraffic(method, path string) {
+func (e *ExecutionModeHandler) logOnboardingTraffic(appID, method, path string) {
 	if e.config.OnboardingLogFile == "" {
 		return
 	}
 
-	// Ensure log directory exists
+	// Create app-specific log file
 	logDir := filepath.Dir(e.config.OnboardingLogFile)
+	logFilename := fmt.Sprintf("onboarding_%s.log", appID)
+	logFilePath := filepath.Join(logDir, logFilename)
+
+	// Ensure log directory exists
 	os.MkdirAll(logDir, 0755)
 
 	// Open file in append mode
-	file, err := os.OpenFile(e.config.OnboardingLogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	file, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
-		log.Printf("Error opening onboarding log: %v", err)
+		log.Printf("Error opening onboarding log for app_id=%s: %v", appID, err)
 		return
 	}
 	defer file.Close()
 
 	// Write log entry
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
-	entry := fmt.Sprintf("[%s] %s %s\n", timestamp, method, path)
+	entry := fmt.Sprintf("[%s] [%s] %s %s\n", timestamp, appID, method, path)
 	file.WriteString(entry)
 }
 

@@ -1,52 +1,130 @@
 {
   "server": {
     "listen_addr": ":8080",
-    "proxy_target": "http://localhost:80",
     "api_listen_addr": ":8443",
+    "multi_app_mode": false,
+    "app_id_header": "X-App-ID",
+    "app_id_fallback": "default",
+    "proxy_target": "http://localhost:80",
     "tls": {
       "enabled": true,
       "cert_file": "/app/config/certs/server.crt",
       "key_file": "/app/config/certs/server.key"
     }
   },
+
   "database": {
     "type": "sqlite",
-    "path": "./data/ifrit.db"
+    "sqlite": {
+      "path": "./data/ifrit.db",
+      "journal_mode": "WAL",
+      "synchronous": "NORMAL"
+    },
+    "mysql": {
+      "host": "localhost",
+      "port": 3306,
+      "username": "ifrit_user",
+      "password": "${DB_PASSWORD}",
+      "database": "ifrit",
+      "max_connections": 20,
+      "ssl": false
+    },
+    "postgresql": {
+      "host": "localhost",
+      "port": 5432,
+      "username": "ifrit_user",
+      "password": "${DB_PASSWORD}",
+      "database": "ifrit",
+      "ssl_mode": "disable",
+      "max_connections": 20
+    },
+    "connection_pool": {
+      "enabled": true,
+      "max_idle_connections": 5,
+      "max_open_connections": 25,
+      "connection_max_lifetime": "1h"
+    }
   },
+
+  "apps": {
+    "app1": {
+      "proxy_target": "http://localhost:3000",
+      "enabled": true,
+      "description": "Main API"
+    },
+    "app2": {
+      "proxy_target": "http://localhost:4000",
+      "enabled": true,
+      "description": "Admin Panel"
+    }
+  },
+
+  "api": {
+    "listen_addr": ":8443",
+    "authentication": {
+      "enabled": true,
+      "token_header": "X-API-Token",
+      "require_auth": true,
+      "token_expiry_days": 90
+    },
+    "rate_limiting": {
+      "enabled": true,
+      "requests_per_minute": 100
+    }
+  },
+
+  "dashboard": {
+    "enabled": true,
+    "listen_addr": ":5601",
+    "authentication": {
+      "enabled": true,
+      "token_header": "X-Dashboard-Token"
+    }
+  },
+
   "llm": {
     "primary": "claude",
     "claude": {
-      "api_key": "sk-PUT_YOUR_API_KEY_HERE",
+      "api_key": "_COPY_YOUR_ANTHROPIC_API_KEY_HERE",
       "model": "claude-3-5-haiku-20241022"
     },
     "gpt": {
-      "api_key": "",
+      "api_key": "${OPENAI_API_KEY}",
       "model": "gpt-4o-mini"
     }
   },
+
   "detection": {
-    "mode": "allowlist",
+    "mode": "detection",
     "enable_local_rules": true,
     "enable_llm": true,
     "llm_only_on": ["POST", "PUT", "DELETE"],
-    "whitelist_ips": ["::1"],
-    "whitelist_paths": []
+    "whitelist_ips": [],
+    "whitelist_paths": [],
+    "skip_body_check_on_whitelist": true
   },
+
   "execution_mode": {
-    "mode": "normal",
+    "mode": "detection",
     "onboarding_auto_whitelist": true,
     "onboarding_duration_days": 7,
     "onboarding_log_file": "./logs/onboarding_traffic.log"
   },
+
   "anonymization": {
     "enabled": true,
     "strategy": "hybrid",
     "store_original": true,
     "sensitive_headers": ["Authorization", "Cookie", "X-API-Key", "X-Auth-Token"]
   },
+
   "payload_management": {
-    "generate_dynamic_payload": false,
+    "enable_intel_collection": true,
+    "intel_collection_payload_id": 1,
+    "cache_llm_payloads_to_db": true,
+    "generate_dynamic_payload": true,
     "dynamic_llm_cache_ttl": 86400,
+    "use_db_payloads": true,
     "default_responses": {
       "reconnaissance": {
         "content": {"error": "Not found"},
@@ -74,9 +152,11 @@
       }
     }
   },
+
   "system": {
     "home_dir": "./",
     "log_dir": "./logs",
-    "log_level": "info"
+    "log_level": "info",
+    "debug": false
   }
 }

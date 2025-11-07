@@ -1,8 +1,8 @@
 # IFRIT Proxy
 
-**Intelligent Threats Deception**
+**Intelligent Threat Deception**
 
-IFRIT is an intelligent reverse proxy that transforms every attack into threat intelligence. It sits between attackers and production infrastructure, intercepting malicious requests and making real-time decisions: return fake data to confuse the attacker, or pass legitimate traffic through unchanged.
+IFRIT is an intelligent deception proxy that transforms every attack into threat intelligence. It sits between attackers and production infrastructure, intercepting malicious requests and making real-time decisions: return fake data to confuse the attacker, or pass legitimate traffic through unchanged.
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
@@ -12,15 +12,15 @@ IFRIT is an intelligent reverse proxy that transforms every attack into threat i
 
 IFRIT operates as intelligent middleware between the internet and production applications. When a request arrives, IFRIT makes a real-time decision: pass it through to the legitimate backend or serve a honeypot response.
 
-The decision-making process follows a **four-stage pipeline**:
+The decision-making process follows a **multi-stage pipeline**:
 
 1. **Stage 0: Whitelist Check** - Does this IP/path have an exception? → Pass through
 2. **Stage 1: Local Rules** - Does this match obvious attack patterns? → Honeypot
 3. **Stage 2: Database Patterns** - Have we seen this attack before? → Honeypot (cached)
-4. **Stage 3: LLM Analysis** - Is this a novel attack? → Call Claude/GPT → Honeypot
+4. **Stage 3: LLM Analysis** - Is this a novel attack? → Ask AI → Honeypot
 
 **Throughout this process:**
-- Sensitive data is anonymized before reaching local/external LLMs (as of current version only support Anthropic Claude)
+- Sensitive data is anonymized before reaching local/external LLMs (currently supports Anthropic Claude)
 - Attack patterns are learned and stored for future reference
 - Attacker profiles are built based on behavior
 - All requests generate detailed logs for threat intelligence
@@ -35,7 +35,7 @@ Legitimate users access the real backend. Attackers receive deceptive honeypot r
 
 Four-stage pipeline detects attacks without requiring infrastructure changes:
 
-- **Whitelist exceptions** - Critical paths bypass honeypot
+- **Whitelist exceptions** - Critical paths bypass honeypot (with optional body check override)
 - **Local rules** - Instant pattern matching (no API calls)
 - **Database patterns** - Learned attacks cached locally (<10ms)
 - **LLM analysis** - Novel threats analyzed by Claude/GPT
@@ -44,9 +44,9 @@ Four-stage pipeline detects attacks without requiring infrastructure changes:
 
 Each attack analyzed becomes a learned pattern:
 
-- First attack: Claude generates honeypot (~3 seconds)
+- First attack: LLM generates honeypot (~3 seconds)
 - Subsequent attacks: Database cache (<10ms)
-- **Result: 90% cost reduction after learning phase**
+- **Result: 95% cost reduction after learning phase**
 
 ### Two Detection Modes
 
@@ -87,10 +87,23 @@ See [DETECTION_MODES.md](docs/DETECTION_MODES.md) for detailed comparison.
 Intelligent honeypot response selection:
 
 - **Stage 1: Database** - Use learned payloads (cached)
-- **Stage 2: LLM** - Claude generates realistic responses
+- **Stage 2: LLM** - AI generates realistic responses (currently supports Anthropic Claude only)
 - **Stage 3: Config** - Fallback to configured defaults
 - **Stage 4: Fallback** - Generic error if nothing matches
- 
+
+### Whitelist Override Flag
+
+**New in 0.1.1:** Control whether whitelisted paths bypass body/header checks:
+```json
+{
+  "detection": {
+    "skip_body_check_on_whitelist": false
+  }
+}
+```
+
+- `true` (default): Whitelisted paths skip ALL checks (fastest)
+- `false`: Whitelisted paths still check body/headers (catches malicious payloads in clean paths)
 
 ### Data Anonymization
 
@@ -105,7 +118,7 @@ Sensitive data is redacted before sending to external LLMs:
 
 **Preserved (needed for detection):**
 - HTTP method and path
-- Attack patterns (SQL injection syntax, path traversal)
+- Attack patterns (SQL injection syntax, path traversal, etc.)
 - Content-Type and User-Agent
 
 **Compliance:**
@@ -140,6 +153,11 @@ Complete command-line interface:
 ./ifrit-cli exception list
 ./ifrit-cli exception add 10.0.0.1 /health
 ./ifrit-cli exception remove 1
+
+# Manage keyword exceptions (body check override)
+./ifrit-cli keyword list
+./ifrit-cli keyword add path health
+./ifrit-cli keyword remove 1
 
 # Database operations
 ./ifrit-cli db stats
@@ -185,7 +203,9 @@ Incoming Request
     ↓
 [Stage 0] Whitelist Check
 ├─ Is IP whitelisted? → ALLOW ✓
-├─ Is path whitelisted? → ALLOW ✓
+├─ Is path whitelisted? → Check skip_body_check_on_whitelist flag
+│  ├─ true: ALLOW ✓
+│  └─ false: Continue to detection
 └─ Continue to Stage 1
     ↓
 [Stage 1] Local Rules
@@ -196,8 +216,8 @@ Incoming Request
 ├─ Matches learned pattern? → HONEYPOT ✓
 └─ Continue to Stage 3
     ↓
-[Stage 3] LLM Analysis (POST/PUT/DELETE only)
-├─ Claude/GPT confirms attack? → HONEYPOT ✓
+[Stage 3] LLM Analysis 
+├─ AI confirms it's an attack? → HONEYPOT ✓
 └─ Not an attack
     ↓
 [Forward] Legitimate Traffic
@@ -212,24 +232,24 @@ Attack Detected (e.g., sql_injection)
     ↓
 [1] Database: Any stored payload? → Use it ✓
     ↓
-[2] LLM: Generate dynamic? → Claude creates response ✓
+[2] LLM: Generate dynamic deception response? → AI LLM creates response ✓
     ↓
 [3] Config: Attack type in defaults? → Use it ✓
     ↓
-[4] Fallback: Generic error → 500 response ✓
+[4] Fallback: Generic error → 500 response ✓ (or whatever response is configured)
 ```
 
 ### Learning Process
 ```
 Hour 1: 100 attacks, 40 unique types
-├─ Detect → 40 Claude calls → $0.12 cost
+├─ Detect → 40 LLM calls → $0.02 cost
 ├─ Store patterns in DB
 └─ Honeypot responses cached
 
 Hour 2: 100 attacks, same 40 types
-├─ Database pattern matches → 0 Claude calls
+├─ Database pattern matches → 0 LLM calls
 ├─ Cached responses used
-└─ $0.00 cost (100% savings!)
+└─ $0.00 cost (100% savings)
 ```
 
 ---
@@ -239,14 +259,14 @@ Hour 2: 100 attacks, same 40 types
 ### Components
 
 **Reverse Proxy Engine**
-- Listens on configured port (8080/8443)
+- Listens on configured port (8080/8443 - customizable)
 - Routes traffic to backend or honeypot
 - Written in Go for high performance
 - TLS/HTTPS support
 
 **Detection Engine**
 - Four-stage pipeline decision logic
-- Whitelist exception checking
+- Whitelist exception checking with skip flag
 - Local rule pattern matching
 - LLM integration for novel threats
 - Data anonymization before external APIs
@@ -266,7 +286,7 @@ Hour 2: 100 attacks, same 40 types
 
 **Data Layer**
 - SQLite database (local, no external deps)
-- Stores exceptions, patterns, attacks, profiles
+- Stores exceptions, patterns, attacks, profiles, keyword exceptions
 - Fast pattern matching optimized queries
 
 **REST API & CLI**
@@ -290,6 +310,7 @@ All configuration through JSON (`config/default.json`). No code changes needed.
     "mode": "detection",
     "enable_local_rules": true,
     "enable_llm": true,
+    "skip_body_check_on_whitelist": false,
     "whitelist_ips": [],
     "whitelist_paths": []
   }
@@ -301,7 +322,7 @@ All configuration through JSON (`config/default.json`). No code changes needed.
 {
   "detection": {
     "mode": "allowlist",
-    "whitelist_ips": ["192.168.1.100", "10.0.0.0/8"],
+    "whitelist_ips": ["192.168.1.100", "192.168.1.102"],
     "whitelist_paths": ["/health", "/status"]
   }
 }
@@ -353,6 +374,17 @@ Options: `onboarding`, `learning`, `normal`
 }
 ```
 
+### Debug Logging
+```json
+{
+  "system": {
+    "debug": false
+  }
+}
+```
+
+Set `true` to enable debug logs (verbose output), `false` for production (clean logs).
+
 ---
 
 ## Documentation
@@ -360,10 +392,9 @@ Options: `onboarding`, `learning`, `normal`
 - **[START_HERE.md](docs/START_HERE.md)** - Quick navigation guide
 - **[INSTALLATION.md](docs/INSTALLATION.md)** - Detailed setup instructions
 - **[DETECTION_MODES.md](docs/DETECTION_MODES.md)** - Detection vs Allowlist modes
-- **[PAYLOAD_MANAGEMENT.md](docs/PAYLOAD_MANAGEMENT.md)** - Honeypot response system
+- **[DECEPTIVE_PAYLOADS_MANAGEMENT.md](docs/DECEPTIVE_PAYLOADS_MANAGEMENT.md)** - Honeypot response system
 - **[ANONYMIZATION_TESTING.md](docs/ANONYMIZATION_TESTING.md)** - Data privacy details
 - **[FEATURES.md](docs/FEATURES.md)** - Complete feature list
-
 
 ---
 
@@ -390,7 +421,7 @@ IFRIT Proxy is licensed under [Apache License 2.0](LICENSE).
 
 ## Support
 
-**Security Issues + Bug reports + General inquiries**
+**Security Issues + Bug reports + Ideas or general inquiries**
 - Email: [ifrit@0t.systems](mailto:ifrit@0t.systems)
 
 ---
@@ -398,3 +429,7 @@ IFRIT Proxy is licensed under [Apache License 2.0](LICENSE).
 ## Acknowledgments
 
 Built with Go, SQLite, Claude AI, and the security community's collective threat intelligence.
+
+**Version:** 0.1.1  
+**Status:** MVP  
+**Last Updated:** November 7, 2025

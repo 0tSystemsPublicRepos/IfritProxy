@@ -4,44 +4,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.1] - 2025-11-07
 
 ### Added
-- **Allowlist Mode** - Strict access control with whitelist-only traffic (everything else blocked)
-- **Detection Modes** - Two modes: Detection (smart analysis) and Allowlist (strict control)
-- **Payload Management System** - Intelligent honeypot response selection with 4-stage fallback
-- **LLM Dynamic Payload Generation** - Claude generates realistic honeypot responses on-the-fly
-- **Payload Caching** - 90% cost reduction after learning phase (first attack: Claude, repeat: cache)
-- **Data Anonymization Engine** - Case-insensitive header redaction, PII tokenization, compliance support
-- **CLI Manager Tool** - Complete database operations from terminal
-- **Pattern Management** - Add, view, remove learned attack patterns
-- **Attacker Profile Viewing** - Track attacker behavior, first seen, last seen, attack types
-- **Exception/Whitelist Management** - Via CLI and database
-- **Comprehensive Attack Filtering** - Query by IP, path, type, time range
-- **REST API** - Attack stats, pattern queries, cache management, health checks
-- **Execution Modes** - Onboarding (auto-learn), Learning (log only), Normal (production)
-- **Threat Intelligence Output** - Attack logs, pattern database, attacker profiles
+- **Skip Body Check on Whitelist Flag** - `skip_body_check_on_whitelist` config option allows checking request body/headers even when path is whitelisted
+- **Graceful Shutdown** - Proper server shutdown with context timeout and signal handling
+- **Debug Log Control** - New `system.debug` config flag to enable/disable debug logging (keeps production logs clean)
+- **Enhanced Detection Pipeline** - All stages now respect the whitelist override flag
 
 ### Changed
-- **Detection Pipeline** - Now 4 stages: Whitelist → Local Rules → Database Patterns → LLM Analysis
-- **Payload Response System** - From static to intelligent selection (DB → LLM → Config → Fallback)
-- **Database Schema** - Enhanced with payload_template column for honeypot caching
-- **Configuration** - Added detection.mode, payload_management, anonymization sections
-- **Detection Engine** - Now supports both Detection and Allowlist modes
-- **Anonymization** - Improved with case-insensitive matching, regex patterns, audit logging
-- **Main Handler** - Integrated payload management into all detection stages
-- **Logging** - Added [ALLOWLIST], [PAYLOAD], [ANON] prefixes for visibility
+- **All Detection Stages** - All stages now accept and respect `skip_body_check_on_whitelist` flag
+- **Main Handler** - Graceful shutdown handler using http.Server instead of blocking ListenAndServe
+- **Logging** - Conditional debug logging based on `system.debug` config (removes verbose output)
+- **Claude Provider** - Removed raw response logging (cleaned up logs)
+- **Detection Engine** - Flag propagated through all detection methods
 
 ### Fixed
-- **Detection Engine** - Proper mode parameter propagation
-- **Payload Selection** - Fixed LLM manager type casting for dynamic generation
-- **Config Loading** - Added PayloadManagement struct with proper defaults
-- **Database Patterns** - Now correctly matched in Stage 2
-- **Header Redaction** - Case-insensitive matching for Authorization, Cookie, X-API-Key
-- **Status Code Handling** - Proper HTTP status codes from payload configuration
+- **Keyword Exception Logic** - Now properly applies `skip_body_check_on_whitelist` flag to all stages:
+  - Stage 1 (Local Rules): Respects flag
+  - Stage 2 (Database Patterns): Respects flag
+  - Stage 3 (Legitimate Cache): Respects flag and returns early if whitelisted
+  - Stage 4 (LLM Analysis): Respects flag
+- **Stage 3 (Cache)** - Now properly caches whitelisted requests when flag=true
+- **Debug Output** - No verbose Claude API response logging in logs
+- **Main.go Formatting** - Fixed malformed debug log statements
 
-### Deprecated
-- Static-only honeypot responses (now dynamic with fallback)
+### Testing (Phase 1.1 - Complete)
+-  Stage 1 (Local Rules) - XSS attack detection and honeypot response
+-  Stage 2 (Database Patterns) - SQL injection detection with keyword exceptions
+-  Stage 3 (Legitimate Cache) - Request caching with whitelist override
+-  Stage 4 (LLM Analysis) - Dynamic payload generation
+-  Flag=true behavior - All stages skip when path whitelisted
+-  Flag=false behavior - All stages check body/headers even if path whitelisted
+-  Multi-app support - app_id propagated through all stages
+-  Graceful shutdown - Ctrl+C handling with proper cleanup
+-  Keyword exceptions - Working across all detection stages
+
+### Performance
+- Whitelist exceptions (flag=true): <1ms
+- Local rules: <5ms
+- Database pattern match: <10ms
+- LLM analysis: ~3 seconds (first time), <10ms (cached)
+
+### Known Issues
+- None identified as of now
+
+---
 
 ## [0.1.0] - 2025-11-05
 
@@ -55,7 +63,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Real-Time Threat Detection** - Claude and GPT integration
 - **Self-Learning Attack Patterns** - SQLite database stores learned signatures
 - **Data Anonymization** - Sensitive headers/data redacted before external APIs (GDPR/HIPAA compliant)
-- **Read-Only Web Dashboard** - Real-time attack feeds, attacker profiles, system health
 - **REST API** - JSON endpoints for integrations and queries
 - **CLI Management Tool** - Full command-line interface for all operations
 - **Attack Logging** - Detailed logs with timestamp, IP, path, type, stage detected
@@ -64,9 +71,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Pattern Database** - Stores learned attack signatures with confidence scores
 - **Exception Management** - Whitelist IPs and paths that bypass detection
 - **Configuration** - Full JSON configuration (no code changes needed)
-- **Docker Support** - Docker and docker-compose deployment
-- **Systemd Support** - Linux service deployment
-- **TLS/HTTPS Support** - Configurable certificates
+- **Multi-App Support** - app_id header support for multi-tenant deployments
+- **Execution Modes** - Onboarding (auto-learn), Learning (log only), Normal (production)
+- **Detection Modes** - Detection (smart analysis) and Allowlist (strict control)
+- **Payload Management** - Intelligent honeypot response selection with 4-stage fallback
+- **LLM Dynamic Payload Generation** - Claude generates realistic honeypot responses
 
 ### Features
 - Instant detection (Stage 1-2: <10ms)
@@ -93,6 +102,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## Supported Versions
+
+| Version | Status | Support Until |
+|---------|--------|---------------|
+| 0.1.x   | Active | TBD           |
+
+---
+
 **Next Major Version Goals:**
 - Multi-database support (MySQL, PostgreSQL, others)
 - Advanced SIEM integrations (Wazuh, Splunk, ELK)
@@ -100,4 +117,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Web UI for dashboard (not read-only basic dashboard)
 - Payload randomization and evolution
 - Local machine learning for analysis & Attacker profiling
-- Commercial edition with enhanced features, enterprise integration & load balancing/clustering
+- enterprise edition with enhanced features, more integrations & load balancing/clustering

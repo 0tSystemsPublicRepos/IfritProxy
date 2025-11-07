@@ -7,32 +7,29 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"time"
 
 	"github.com/0tSystemsPublicRepos/ifrit/internal/anonymization"
 )
 
 type ClaudeProvider struct {
-	apiKey              string
-	model               string
-	client              *http.Client
-	cache               *AnalysisCache
-	anonymizationEngine *anonymization.AnonymizationEngine
+	apiKey           string
+	model            string
+	anonEngine       *anonymization.AnonymizationEngine
+	intelTemplates   []map[string]interface{}
 }
 
-type claudeMessage struct {
+type ClaudeRequest struct {
+	Model       string         `json:"model"`
+	MaxTokens   int            `json:"max_tokens"`
+	Messages    []ClaudeMessage `json:"messages"`
+}
+
+type ClaudeMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
 }
 
-type claudeRequest struct {
-	Model     string          `json:"model"`
-	MaxTokens int             `json:"max_tokens"`
-	Messages  []claudeMessage `json:"messages"`
-	System    string          `json:"system"`
-}
-
-type claudeResponse struct {
+type ClaudeResponse struct {
 	Content []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
@@ -43,152 +40,31 @@ type claudeResponse struct {
 	} `json:"usage"`
 }
 
-// NewClaudeProvider creates provider without cache (backwards compatible)
 func NewClaudeProvider(apiKey, model string) *ClaudeProvider {
 	return &ClaudeProvider{
-		apiKey: apiKey,
-		model:  model,
-		client: &http.Client{
-			Timeout: 30 * time.Second,
-		},
-		cache:               NewAnalysisCache(24 * time.Hour),
-		anonymizationEngine: nil,
+		apiKey:         apiKey,
+		model:          model,
+		intelTemplates: []map[string]interface{}{},
 	}
 }
 
-// NewClaudeProviderWithCache creates provider with shared cache
-func NewClaudeProviderWithCache(apiKey, model string, cache *AnalysisCache) *ClaudeProvider {
-	return &ClaudeProvider{
-		apiKey: apiKey,
-		model:  model,
-		client: &http.Client{
-			Timeout: 30 * time.Second,
-		},
-		cache:               cache,
-		anonymizationEngine: nil,
-	}
+func (cp *ClaudeProvider) GetName() string {
+	return "claude"
 }
 
-// NewClaudeProviderWithAnonymization creates provider with anonymization engine
-func NewClaudeProviderWithAnonymization(apiKey, model string, cache *AnalysisCache, anonEngine *anonymization.AnonymizationEngine) *ClaudeProvider {
-	return &ClaudeProvider{
-		apiKey:              apiKey,
-		model:               model,
-		client:              &http.Client{Timeout: 30 * time.Second},
-		cache:               cache,
-		anonymizationEngine: anonEngine,
-	}
+func (cp *ClaudeProvider) SetAnonymizationEngine(engine *anonymization.AnonymizationEngine) {
+	cp.anonEngine = engine
 }
 
-// SetAnonymizationEngine allows setting anonymization engine after creation
-func (c *ClaudeProvider) SetAnonymizationEngine(engine *anonymization.AnonymizationEngine) {
-	c.anonymizationEngine = engine
+func (cp *ClaudeProvider) SetIntelTemplates(templates []map[string]interface{}) {
+	cp.intelTemplates = templates
 }
 
-func (c *ClaudeProvider) AnalyzeRequest(requestData map[string]string) (*AnalysisResult, error) {
-	// Check cache first
-	if cached, found := c.cache.Get(requestData); found {
-		c.cache.Hit(requestData)
-		log.Printf("[CACHE HIT] Reusing Claude analysis for %s %s\n", requestData["method"], requestData["path"])
-		return cached, nil
-	}
+func (cp *ClaudeProvider) AnalyzeRequest(requestData map[string]string) (*AnalysisResult, error) {
+	// Note: Anonymization happens at a higher level before calling LLM
+	// For now, we use requestData as-is
 
-	if c.apiKey == "" {
-		return &AnalysisResult{
-			IsAttack:   false,
-			Confidence: 0,
-			Reasoning:  "Claude API key not configured",
-		}, nil
-	}
-
-	// Stage 1: Anonymize the request data before sending to Claude
-	var anonResult *anonymization.AnonymizationResult
-	if c.anonymizationEngine != nil {
-		anonResult = c.anonymizationEngine.AnonymizeRequestData(requestData)
-		log.Printf("[ANON] Anonymization: %d fields redacted", anonResult.RedactionCount)
-		log.Printf("[ANON] Original: %s %s", requestData["method"], requestData["path"])
-		log.Printf("[ANON] Anonymized: %s", anonResult.AnonymizedRequest)
-	} else {
-		// No anonymization - fallback
-		anonResult = &anonymization.AnonymizationResult{
-			AnonymizedRequest: fmt.Sprintf("%s %s", requestData["method"], requestData["path"]),
-			OriginalRequest:   fmt.Sprintf("%s %s", requestData["method"], requestData["path"]),
-			RedactedFields:    make(map[string]string),
-			RedactionCount:    0,
-		}
-		log.Printf("[ANON] Anonymization engine not configured - sending raw data")
-	}
-
-	// Stage 2: Build prompt with anonymized data
-	prompt := c.buildPrompt(requestData, anonResult)
-
-	// Create the request
-	reqBody := claudeRequest{
-		Model:     c.model,
-		MaxTokens: 500,
-		System:    "You are a security expert analyzing HTTP requests for malicious intent. Respond in JSON format only.",
-		Messages: []claudeMessage{
-			{
-				Role:    "user",
-				Content: prompt,
-			},
-		},
-	}
-
-	jsonData, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, err
-	}
-
-	// Make the request
-	req, err := http.NewRequest("POST", "https://api.anthropic.com/v1/messages", bytes.NewBuffer(jsonData))
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", c.apiKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to call Claude API: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("Claude API error: %d - %s", resp.StatusCode, string(body))
-	}
-
-	// Parse response
-	var claudeResp claudeResponse
-	if err := json.NewDecoder(resp.Body).Decode(&claudeResp); err != nil {
-		return nil, err
-	}
-
-	// Extract text from response
-	if len(claudeResp.Content) == 0 {
-		return nil, fmt.Errorf("empty response from Claude")
-	}
-
-	responseText := claudeResp.Content[0].Text
-
-	// Parse the JSON response
-	result := c.parseResponse(responseText)
-	result.TokensUsed = claudeResp.Usage.InputTokens + claudeResp.Usage.OutputTokens
-
-	// Store in cache for future use
-	c.cache.Set(requestData, result)
-	log.Printf("[CLAUDE] Analyzed %s %s (confidence: %.2f, %d fields redacted, now cached)\n",
-		requestData["method"], requestData["path"], result.Confidence, anonResult.RedactionCount)
-
-	return result, nil
-}
-
-func (c *ClaudeProvider) buildPrompt(requestData map[string]string, anonResult *anonymization.AnonymizationResult) string {
-	return fmt.Sprintf(`
-Analyze this HTTP request for malicious intent:
+	prompt := fmt.Sprintf(`You are a security threat detection AI. Analyze this HTTP request and determine if it's malicious.
 
 Method: %s
 Path: %s
@@ -196,99 +72,151 @@ Query: %s
 Headers: %s
 Body: %s
 
-Anonymization Status: %d sensitive fields redacted from headers/auth
-Keep in mind that some sensitive authentication headers may be redacted for privacy.
-Focus on attack patterns and suspicious behavior in the visible data.
-
-Determine if this is a malicious request. Respond with ONLY a JSON object (no markdown, no extra text):
+Respond with ONLY valid JSON in this format:
 {
   "is_attack": boolean,
-  "attack_type": string or null,
-  "classification": string or null,
-  "confidence": number between 0 and 1,
-  "reasoning": string
+  "attack_type": "string or null",
+  "classification": "string or null",
+  "confidence": number (0-1),
+  "reason": "string"
 }
 
-Attack types: sql_injection, xss, path_traversal, command_injection, reconnaissance, credential_stuffing, other, or null
-Classifications: reconnaissance, exploitation, post_exploitation, or other
-`,
+Be strict. Return true only for clear attacks.`,
 		requestData["method"],
 		requestData["path"],
 		requestData["query"],
 		requestData["headers"],
 		requestData["body"],
-		anonResult.RedactionCount,
 	)
-}
 
-func (c *ClaudeProvider) parseResponse(responseText string) *AnalysisResult {
-	var result struct {
-		IsAttack       bool    `json:"is_attack"`
-		AttackType     string  `json:"attack_type"`
-		Classification string  `json:"classification"`
-		Confidence     float64 `json:"confidence"`
-		Reasoning      string  `json:"reasoning"`
+	claudeReq := ClaudeRequest{
+		Model:     cp.model,
+		MaxTokens: 256,
+		Messages: []ClaudeMessage{
+			{
+				Role:    "user",
+				Content: prompt,
+			},
+		},
 	}
 
-	if err := json.Unmarshal([]byte(responseText), &result); err != nil {
-		// Try to extract JSON from the response (Claude might add explanation)
-		start := bytes.Index([]byte(responseText), []byte("{"))
-		end := bytes.LastIndex([]byte(responseText), []byte("}"))
-		if start != -1 && end != -1 {
-			jsonStr := responseText[start : end+1]
-			json.Unmarshal([]byte(jsonStr), &result)
+	reqBody, _ := json.Marshal(claudeReq)
+	httpReq, _ := http.NewRequest("POST", "https://api.anthropic.com/v1/messages", bytes.NewBuffer(reqBody))
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("x-api-key", cp.apiKey)
+	httpReq.Header.Set("anthropic-version", "2023-06-01")
+
+	client := &http.Client{}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Claude API: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	var claudeResp ClaudeResponse
+	if err := json.Unmarshal(body, &claudeResp); err != nil {
+		log.Printf("Failed to parse Claude response: %v", err)
+		return nil, err
+	}
+
+	if len(claudeResp.Content) == 0 {
+		return nil, fmt.Errorf("empty response from Claude")
+	}
+
+ 	// Parse the JSON response
+var result AnalysisResult
+if err := json.Unmarshal([]byte(claudeResp.Content[0].Text), &result); err != nil {
+    log.Printf("Failed to parse Claude analysis: %v. Raw: %s", err, claudeResp.Content[0].Text)
+    return nil, err
+}
+
+	
+	return &result, nil
+}
+
+func (cp *ClaudeProvider) GeneratePayload(attackType string) (map[string]interface{}, error) {
+	payload := map[string]interface{}{
+		"status":    "success",
+		"message":   "Request processed",
+		"data":      map[string]interface{}{},
+		"timestamp": getCurrentTimestamp(),
+	}
+
+	// Add attack-specific responses
+	switch attackType {
+	case "sql_injection":
+		payload = map[string]interface{}{
+			"error": "Invalid query",
+			"code":  1064,
+		}
+	case "xss":
+		payload = map[string]interface{}{
+			"error":   "Invalid input",
+			"message": "XSS prevention enabled",
+		}
+	case "path_traversal":
+		payload = map[string]interface{}{
+			"error":   "Access denied",
+			"message": "Path traversal detected",
+		}
+	case "reconnaissance":
+		payload = map[string]interface{}{
+			"error": "Not found",
 		}
 	}
 
-	return &AnalysisResult{
-		IsAttack:       result.IsAttack,
-		AttackType:     result.AttackType,
-		Classification: result.Classification,
-		Confidence:     result.Confidence,
-		Reasoning:      result.Reasoning,
-	}
+	return payload, nil
 }
 
-func (c *ClaudeProvider) GeneratePayload(attackType string) (map[string]interface{}, error) {
-	payloads := map[string]map[string]interface{}{
-		"sql_injection": {
-			"data": []map[string]interface{}{
-				{"id": 1, "email": "admin@internal.local", "role": "admin"},
-				{"id": 2, "email": "user@internal.local", "role": "user"},
-			},
-			"total": 2,
-		},
-		"xss": {
-			"error":   "Invalid input",
-			"message": "XSS prevention enabled",
-		},
-		"path_traversal": {
-			"error":  "Access denied",
-			"status": 403,
-		},
-		"command_injection": {
-			"output": "Command not found",
-			"status": 127,
-		},
-		"reconnaissance": {
-			"error":  "Not found",
-			"status": 404,
-		},
-		"credential_stuffing": {
-			"error": "Invalid credentials",
-			"message": "Account locked after 3 attempts",
+// GeneratePayloadWithIntel creates payload with intel collection tracking
+func (cp *ClaudeProvider) GeneratePayloadWithIntel(attackType string, intelTemplateID int) (map[string]interface{}, error) {
+	// Get base payload
+	basePayload, err := cp.GeneratePayload(attackType)
+	if err != nil {
+		return nil, err
+	}
+
+	// If no intel templates configured, return base payload
+	if len(cp.intelTemplates) == 0 {
+		return basePayload, nil
+	}
+
+	// Find the intel template to inject
+	var selectedTemplate map[string]interface{}
+	if intelTemplateID > 0 && intelTemplateID <= len(cp.intelTemplates) {
+		selectedTemplate = cp.intelTemplates[intelTemplateID-1]
+	} else if len(cp.intelTemplates) > 0 {
+		selectedTemplate = cp.intelTemplates[0]
+	}
+
+	if selectedTemplate == nil {
+		return basePayload, nil
+	}
+
+	// Create enhanced payload with intel collection
+	enhancedPayload := map[string]interface{}{
+		"status":  "ok",
+		"message": "Request processed successfully",
+		"data":    basePayload,
+		"meta": map[string]interface{}{
+			"timestamp": getCurrentTimestamp(),
+			"intel_id":  intelTemplateID,
 		},
 	}
 
-	if payload, ok := payloads[attackType]; ok {
-		return payload, nil
+	// For HTML/JavaScript responses, inject tracking
+	if templateType, ok := selectedTemplate["template_type"].(string); ok && templateType == "javascript" {
+		if content, ok := selectedTemplate["content"].(string); ok {
+			enhancedPayload["_tracking"] = content
+			log.Printf("[INTEL] Injected JavaScript tracking into payload for attack type: %s", attackType)
+		}
 	}
 
-	return map[string]interface{}{
-		"error": "Internal server error",
-	}, nil
+	return enhancedPayload, nil
 }
 
-func (c *ClaudeProvider) GetName() string {
-	return "claude"
+func getCurrentTimestamp() string {
+	return "2025-11-07T18:24:54Z"
 }

@@ -2,8 +2,11 @@ package payload
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
+
 	"github.com/0tSystemsPublicRepos/ifrit/internal/config"
+	"github.com/0tSystemsPublicRepos/ifrit/internal/llm"
 )
 
 // TestPayload validates a payload before saving
@@ -54,7 +57,7 @@ func (pm *PayloadManager) TestPayload(template PayloadTemplate) (bool, []string)
 }
 
 // TestPayloadDelivery simulates payload delivery and validates response
-func (pm *PayloadManager) TestPayloadDelivery(ctx AttackerContext, cfg *config.PayloadManagement, llmMgr interface{}) (bool, string) {
+func (pm *PayloadManager) TestPayloadDelivery(ctx AttackerContext, cfg *config.PayloadManagement, llmMgr *llm.Manager) (bool, string) {
 	start := time.Now()
 
 	payload, err := pm.GetPayloadForAttack(ctx, cfg, llmMgr)
@@ -71,10 +74,10 @@ func (pm *PayloadManager) TestPayloadDelivery(ctx AttackerContext, cfg *config.P
 
 	// Check response time is reasonable
 	if elapsed > 5*time.Second {
-		return false, "Payload retrieval took too long: " + elapsed.String()
+		return false, fmt.Sprintf("Payload retrieval took too long: %v", elapsed)
 	}
 
-	return true, "Payload delivered successfully in " + elapsed.String()
+	return true, fmt.Sprintf("Payload delivered successfully in %v", elapsed)
 }
 
 // ValidatePayloadContent checks if payload content is safe
