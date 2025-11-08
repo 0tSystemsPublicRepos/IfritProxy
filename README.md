@@ -67,11 +67,6 @@ See [DETECTION_MODES.md](docs/DETECTION_MODES.md) for detailed comparison.
 - 7-day default duration
 - Auto-whitelists discovered legitimate paths
 
-**Learning Mode**
-- All traffic passes through
-- Full logging for manual review
-- No blocking
-
 **Normal Mode**
 - Full detection and honeypot responses
 - Real-time learning
