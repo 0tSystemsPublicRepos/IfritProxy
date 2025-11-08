@@ -296,7 +296,7 @@ All configuration through JSON (`config/default.json`). No code changes needed.
 {
   "detection": {
     "mode": "allowlist",
-    "whitelist_ips": ["192.168.1.100", "10.0.0.0/8"],
+    "whitelist_ips": ["192.168.1.100", "192.168.1.101"],
     "whitelist_paths": ["/health", "/status"]
   }
 }
