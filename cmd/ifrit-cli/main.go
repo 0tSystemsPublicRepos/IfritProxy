@@ -1348,6 +1348,15 @@ func listTokens(cmd *cobra.Command, args []string) {
 
 func createToken(cmd *cobra.Command, args []string) {
 	userID := args[0]
+
+	// Auto-create user if doesn't exist
+	var exists bool
+	db.QueryRow("SELECT EXISTS(SELECT 1 FROM api_users WHERE id = ?)", userID).Scan(&exists)
+	if !exists {
+		db.Exec("INSERT INTO api_users (id, username, role, is_active) VALUES (?, ?, 'admin', 1)", userID, "user_"+userID)
+		fmt.Printf("✓ User auto-created (ID: %s)\n", userID)
+	}
+
 	tokenName := args[1]
 
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"

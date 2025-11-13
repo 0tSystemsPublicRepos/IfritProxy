@@ -277,22 +277,37 @@ func (s *APIServer) handleDashboard(w http.ResponseWriter, r *http.Request) {
         }
 
         async function fetchWithAuth(url) {
-            const headers = {'Content-Type': 'application/json', 'X-API-Token': apiToken};
+            if (!apiToken) {
+                console.error('No API token');
+                return null;
+            }
+            const headers = {
+                'Content-Type': 'application/json',
+                'X-API-Token': apiToken
+            };
             try {
-                const response = await fetch(url, { headers });
+                const response = await fetch(url, { 
+                    method: 'GET',
+                    headers: headers,
+                    mode: 'cors'
+                });
                 if (response.status === 401) {
-                    alert('Invalid token');
+                    console.error('Token invalid, logging out');
                     logout();
                     return null;
                 }
-                if (!response.ok) throw new Error('API error');
+                if (!response.ok) {
+                    console.error('API error: ' + response.status);
+                    return null;
+                }
                 return await response.json();
             } catch (error) {
-                console.error('Error:', error);
+                console.error('Fetch error:', error);
                 return null;
             }
         }
 
+ 
         async function fetchData() {
             const attacks = await fetchWithAuth(API_BASE + '/api/attacks?limit=100');
             if (!attacks) return;
