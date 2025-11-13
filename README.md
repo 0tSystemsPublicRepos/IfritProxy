@@ -1,18 +1,18 @@
-# IFRIT Proxy - Intelligent Threats Deception
+# IFRIT Proxy - AI Powererd Threats Deception
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 ---
 
 ## Overview
 
-IFRIT operates as intelligent proxy between the internet and production applications. When a request arrives, IFRIT makes a real-time decision: pass it through to the legitimate backend or serve a honeypot response.
+IFRIT is an AI-powered reverse proxy that intercepts incoming requests in real time, classifying each one as legitimate or malicious. Legitimate traffic is forwarded to backend; malicious traffic receives a customized AI-generated honeypot response that mimics the requested resource with fabricated data, deceiving attackers into wasting time on fake targets.
 
-The decision-making process follows a **four-stage pipeline**:
+The proxy decision-making process follows a **four-stage pipeline**:
 
 1. **Stage 0: Whitelist Check** - Does this IP/path have an exception? → Pass through
 2. **Stage 1: Local Rules** - Does this match obvious attack patterns? → Honeypot
 3. **Stage 2: Database Patterns** - Have we seen this attack before? → Honeypot (cached)
-4. **Stage 3: LLM Analysis** - Is this a novel attack? → Call Claude/GPT → Honeypot
+4. **Stage 3: LLM Analysis** - AI: Is this a novel attack? → Generate Honeypot response tailored to this specific attack
 
 **Throughout this process:**
 - Sensitive data is anonymized before reaching local/external LLMs (as of current version only support Anthropic Claude)
@@ -66,11 +66,6 @@ See [DETECTION_MODES.md](docs/DETECTION_MODES.md) for detailed comparison.
 - Zero blocking
 - 7-day default duration
 - Auto-whitelists discovered legitimate paths
-
-**Learning Mode**
-- All traffic passes through
-- Full logging for manual review
-- No blocking
 
 **Normal Mode**
 - Full detection and honeypot responses
@@ -296,7 +291,7 @@ All configuration through JSON (`config/default.json`). No code changes needed.
 {
   "detection": {
     "mode": "allowlist",
-    "whitelist_ips": ["192.168.1.100", "10.0.0.0/8"],
+    "whitelist_ips": ["192.168.1.100", "192.168.1.101"],
     "whitelist_paths": ["/health", "/status"]
   }
 }
