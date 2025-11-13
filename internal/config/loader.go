@@ -108,20 +108,24 @@ type DashboardAuthConfig struct {
 	TokenHeader string `json:"token_header"`
 }
 
+
 // === MAIN CONFIG STRUCTURE ===
 
 type Config struct {
-	Server            ServerConfig          `json:"server"`
-	Database          DatabaseConfig        `json:"database"`
-	Apps              map[string]AppConfig  `json:"apps"`
-	API               APIConfig             `json:"api"`
-	Dashboard         DashboardConfig       `json:"dashboard"`
-	LLM               LLMConfig             `json:"llm"`
-	Detection         DetectionConfig       `json:"detection"`
-	ExecutionMode     ExecutionModeConfig   `json:"execution_mode"`
-	Anonymization     AnonymizationConfig   `json:"anonymization"`
-	PayloadManagement PayloadManagement     `json:"payload_management"`
-	System            SystemConfig          `json:"system"`
+	Server               ServerConfig             `json:"server"`
+	Database             DatabaseConfig           `json:"database"`
+	Apps                 map[string]AppConfig     `json:"apps"`
+	API                  APIConfig                `json:"api"`
+	Dashboard            DashboardConfig          `json:"dashboard"`
+	LLM                  LLMConfig                `json:"llm"`
+	Detection            DetectionConfig          `json:"detection"`
+	ExecutionMode        ExecutionModeConfig      `json:"execution_mode"`
+	Anonymization        AnonymizationConfig      `json:"anonymization"`
+	PayloadManagement    PayloadManagement        `json:"payload_management"`
+	System               SystemConfig             `json:"system"`
+	ThreatIntelligence   ThreatIntelligenceConfig `json:"threat_intelligence"`
+	Notifications        NotificationsConfig      `json:"notifications"`
+	Webhooks             WebhooksConfig           `json:"webhooks"`
 }
 
 type LLMConfig struct {
@@ -141,13 +145,13 @@ type GPTConfig struct {
 }
 
 type DetectionConfig struct {
-	Mode             string   `json:"mode"`              // "detection" or "allowlist"
-	EnableLocalRules bool     `json:"enable_local_rules"`
-	EnableLLM        bool     `json:"enable_llm"`
-	LLMOnlyOn        []string `json:"llm_only_on"`
-	WhitelistIPs     []string `json:"whitelist_ips"`
-	WhitelistPaths   []string `json:"whitelist_paths"`
-SkipBodyCheckOnWhitelist bool   `json:"skip_body_check_on_whitelist"`
+	Mode                     string   `json:"mode"`              // "detection" or "allowlist"
+	EnableLocalRules         bool     `json:"enable_local_rules"`
+	EnableLLM                bool     `json:"enable_llm"`
+	LLMOnlyOn                []string `json:"llm_only_on"`
+	WhitelistIPs             []string `json:"whitelist_ips"`
+	WhitelistPaths           []string `json:"whitelist_paths"`
+	SkipBodyCheckOnWhitelist bool     `json:"skip_body_check_on_whitelist"`
 }
 
 type ExecutionModeConfig struct {
@@ -241,6 +245,15 @@ func expandEnvVars(cfg *Config) {
 	cfg.Database.SQLite.Path = os.ExpandEnv(cfg.Database.SQLite.Path)
 	cfg.Database.MySQL.Password = os.ExpandEnv(cfg.Database.MySQL.Password)
 	cfg.Database.PostgreSQL.Password = os.ExpandEnv(cfg.Database.PostgreSQL.Password)
+	cfg.ThreatIntelligence.APIs.AbuseIPDB.APIKey = os.ExpandEnv(cfg.ThreatIntelligence.APIs.AbuseIPDB.APIKey)
+	cfg.ThreatIntelligence.APIs.VirusTotal.APIKey = os.ExpandEnv(cfg.ThreatIntelligence.APIs.VirusTotal.APIKey)
+	cfg.ThreatIntelligence.APIs.IPInfo.APIKey = os.ExpandEnv(cfg.ThreatIntelligence.APIs.IPInfo.APIKey)
+	cfg.Notifications.Providers.Email.SMTPPassword = os.ExpandEnv(cfg.Notifications.Providers.Email.SMTPPassword)
+	cfg.Notifications.Providers.Slack.WebhookURL = os.ExpandEnv(cfg.Notifications.Providers.Slack.WebhookURL)
+	cfg.Notifications.Providers.Twilio.AccountSID = os.ExpandEnv(cfg.Notifications.Providers.Twilio.AccountSID)
+	cfg.Notifications.Providers.Twilio.AuthToken = os.ExpandEnv(cfg.Notifications.Providers.Twilio.AuthToken)
+	cfg.Notifications.Providers.Twilio.FromNumber = os.ExpandEnv(cfg.Notifications.Providers.Twilio.FromNumber)
+	cfg.Notifications.Providers.Twilio.ToNumber = os.ExpandEnv(cfg.Notifications.Providers.Twilio.ToNumber)
 }
 
 func getDefaults() *Config {
@@ -529,6 +542,52 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.System.LogLevel == "" {
 		cfg.System.LogLevel = "info"
+	}
+
+	// Threat Intelligence defaults
+	if cfg.ThreatIntelligence.CacheTTLHours == 0 {
+		cfg.ThreatIntelligence.CacheTTLHours = 24
+	}
+	if cfg.ThreatIntelligence.EnrichmentWorkers == 0 {
+		cfg.ThreatIntelligence.EnrichmentWorkers = 3
+	}
+	if cfg.ThreatIntelligence.APIs.AbuseIPDB.TimeoutSeconds == 0 {
+		cfg.ThreatIntelligence.APIs.AbuseIPDB.TimeoutSeconds = 10
+	}
+	if cfg.ThreatIntelligence.APIs.VirusTotal.TimeoutSeconds == 0 {
+		cfg.ThreatIntelligence.APIs.VirusTotal.TimeoutSeconds = 10
+	}
+	if cfg.ThreatIntelligence.APIs.IPInfo.TimeoutSeconds == 0 {
+		cfg.ThreatIntelligence.APIs.IPInfo.TimeoutSeconds = 10
+	}
+	if cfg.ThreatIntelligence.RiskScoreWeights.AbuseIPDBScore == 0 {
+		cfg.ThreatIntelligence.RiskScoreWeights.AbuseIPDBScore = 0.4
+	}
+	if cfg.ThreatIntelligence.RiskScoreWeights.VirusTotalDetections == 0 {
+		cfg.ThreatIntelligence.RiskScoreWeights.VirusTotalDetections = 0.35
+	}
+	if cfg.ThreatIntelligence.RiskScoreWeights.IPInfoRisk == 0 {
+		cfg.ThreatIntelligence.RiskScoreWeights.IPInfoRisk = 0.25
+	}
+	if cfg.ThreatIntelligence.ThreatLevelThresholds.Critical == 0 {
+		cfg.ThreatIntelligence.ThreatLevelThresholds.Critical = 80
+	}
+	if cfg.ThreatIntelligence.ThreatLevelThresholds.High == 0 {
+		cfg.ThreatIntelligence.ThreatLevelThresholds.High = 60
+	}
+	if cfg.ThreatIntelligence.ThreatLevelThresholds.Medium == 0 {
+		cfg.ThreatIntelligence.ThreatLevelThresholds.Medium = 40
+	}
+
+	// Webhooks defaults
+	if cfg.Webhooks.RetryCount == 0 {
+		cfg.Webhooks.RetryCount = 3
+	}
+	if cfg.Webhooks.RetryDelaySeconds == 0 {
+		cfg.Webhooks.RetryDelaySeconds = 5
+	}
+	if cfg.Webhooks.TimeoutSeconds == 0 {
+		cfg.Webhooks.TimeoutSeconds = 10
 	}
 
 	// Create directories

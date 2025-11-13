@@ -3,6 +3,7 @@ package database
 import (
 	"database/sql"
 	"sync"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -528,4 +529,165 @@ func (s *SQLiteDB) ValidateAPIToken(tokenHash string) (map[string]interface{}, e
 // GetDB returns the underlying *sql.DB connection
 func (s *SQLiteDB) GetDB() *sql.DB {
 	return s.db
+}
+
+// StoreThreatIntelligence stores or updates threat intelligence for an IP
+func (s *SQLiteDB) StoreThreatIntelligence(appID, sourceIP string, riskScore int, abuseIPDBScore *float64, abuseIPDBReports *int, virusTotalMalicious, virusTotalSuspicious, ipinfoVPN, ipinfoProxy bool, country, org, privacyType string, threatLevel string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cachedUntil := time.Now().AddDate(0, 0, 1) // 24 hours from now
+	var err error
+	_, err = s.db.Exec(`
+		INSERT OR IGNORE INTO attacker_profiles (app_id, source_ip)
+		VALUES (?, ?)
+	`, appID, sourceIP)
+	
+	if err != nil {
+		return err
+	}
+
+
+
+	_, err = s.db.Exec(`
+		INSERT INTO threat_intelligence 
+		(app_id, source_ip, risk_score, abuseipdb_score, abuseipdb_reports, virustotal_malicious, virustotal_suspicious, is_vpn, is_proxy, ipinfo_country, ipinfo_org, ipinfo_privacy_type, threat_level, enriched_at, cached_until, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		ON CONFLICT(app_id, source_ip) DO UPDATE SET
+			risk_score = excluded.risk_score,
+			abuseipdb_score = excluded.abuseipdb_score,
+			abuseipdb_reports = excluded.abuseipdb_reports,
+			virustotal_malicious = excluded.virustotal_malicious,
+			virustotal_suspicious = excluded.virustotal_suspicious,
+			is_vpn = excluded.is_vpn,
+			is_proxy = excluded.is_proxy,
+			ipinfo_country = excluded.ipinfo_country,
+			ipinfo_org = excluded.ipinfo_org,
+			ipinfo_privacy_type = excluded.ipinfo_privacy_type,
+			threat_level = excluded.threat_level,
+			enriched_at = CURRENT_TIMESTAMP,
+			cached_until = ?,
+			updated_at = CURRENT_TIMESTAMP
+	`,
+		appID, sourceIP, riskScore, abuseIPDBScore, abuseIPDBReports, virusTotalMalicious, virusTotalSuspicious, ipinfoVPN, ipinfoProxy, country, org, privacyType, threatLevel, cachedUntil, cachedUntil,
+	)
+
+	return err
+}
+
+// GetThreatIntelligence retrieves threat intelligence for an IP
+func (s *SQLiteDB) GetThreatIntelligence(appID, sourceIP string) (map[string]interface{}, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var (
+		id, riskScore, abuseIPDBReports, virusTotalMalicious, virusTotalSuspicious int64
+		abuseIPDBScore sql.NullFloat64
+		isVPN, isProxy, isHosting, isTor bool
+		country, org, privacyType, threatLevel, enrichedAt, cachedUntil, lastAttackAt string
+		totalAttacks int64
+	)
+
+	err := s.db.QueryRow(`
+		SELECT id, risk_score, abuseipdb_score, abuseipdb_reports, virustotal_malicious, virustotal_suspicious, is_vpn, is_proxy, is_hosting, is_tor, ipinfo_country, ipinfo_org, ipinfo_privacy_type, threat_level, enriched_at, cached_until, last_attack_at, total_attacks
+		FROM threat_intelligence
+		WHERE app_id = ? AND source_ip = ?
+	`, appID, sourceIP).Scan(&id, &riskScore, &abuseIPDBScore, &abuseIPDBReports, &virusTotalMalicious, &virusTotalSuspicious, &isVPN, &isProxy, &isHosting, &isTor, &country, &org, &privacyType, &threatLevel, &enrichedAt, &cachedUntil, &lastAttackAt, &totalAttacks)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	return map[string]interface{}{
+		"id":                    id,
+		"app_id":                appID,
+		"source_ip":             sourceIP,
+		"risk_score":            riskScore,
+		"abuseipdb_score":       abuseIPDBScore.Float64,
+		"abuseipdb_reports":     abuseIPDBReports,
+		"virustotal_malicious":  virusTotalMalicious,
+		"virustotal_suspicious": virusTotalSuspicious,
+		"is_vpn":                isVPN,
+		"is_proxy":              isProxy,
+		"is_hosting":            isHosting,
+		"is_tor":                isTor,
+		"country":               country,
+		"org":                   org,
+		"privacy_type":          privacyType,
+		"threat_level":          threatLevel,
+		"enriched_at":           enrichedAt,
+		"cached_until":          cachedUntil,
+		"last_attack_at":        lastAttackAt,
+		"total_attacks":         totalAttacks,
+	}, nil
+}
+
+// GetTopThreatsByRiskScore retrieves top attackers by risk score for an app
+func (s *SQLiteDB) GetTopThreatsByRiskScore(appID string, limit int) ([]map[string]interface{}, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.db.Query(`
+		SELECT id, source_ip, risk_score, threat_level, total_attacks, ipinfo_country, updated_at
+		FROM threat_intelligence
+		WHERE app_id = ?
+		ORDER BY risk_score DESC
+		LIMIT ?
+	`, appID, limit)
+
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var threats []map[string]interface{}
+	for rows.Next() {
+		var id, riskScore, totalAttacks int64
+		var sourceIP, threatLevel, country, updatedAt string
+
+		if err := rows.Scan(&id, &sourceIP, &riskScore, &threatLevel, &totalAttacks, &country, &updatedAt); err != nil {
+			continue
+		}
+
+		threats = append(threats, map[string]interface{}{
+			"id":           id,
+			"source_ip":    sourceIP,
+			"risk_score":   riskScore,
+			"threat_level": threatLevel,
+			"total_attacks": totalAttacks,
+			"country":      country,
+			"updated_at":   updatedAt,
+		})
+	}
+
+	return threats, rows.Err()
+}
+
+// IsThreatIntelligenceCached checks if threat intel data is still valid (within cache TTL)
+func (s *SQLiteDB) IsThreatIntelligenceCached(appID, sourceIP string) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var cachedUntil string
+	err := s.db.QueryRow(`
+		SELECT cached_until FROM threat_intelligence
+		WHERE app_id = ? AND source_ip = ?
+	`, appID, sourceIP).Scan(&cachedUntil)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+
+	parsedTime, err := time.Parse(time.RFC3339, cachedUntil)
+	if err != nil {
+		return false, err
+	}
+
+	return time.Now().Before(parsedTime), nil
 }

@@ -67,9 +67,12 @@ coverage.out
 dist/
 build/
 
-
-# Configuration with secrets
+# Configuration with secrets (BLOCK REAL CONFIG)
 config/default.json
 config/default.yaml
 config/default.yml
 
+# BUT ALLOW TEMPLATES
+!config/default.json.example
+!config/default.yaml.example
+!config/default.yml.example

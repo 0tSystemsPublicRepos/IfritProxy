@@ -55,6 +55,15 @@ func (s *APIServer) Start() error {
 	mux.HandleFunc("/api/cache/clear", s.corsMiddleware(s.authMiddleware(s.handleClearCache)))
 	mux.HandleFunc("/api/intel/stats", s.corsMiddleware(s.authMiddleware(s.handleGetIntelStats)))
 	mux.HandleFunc("/api/intel/templates", s.corsMiddleware(s.authMiddleware(s.handleGetIntelTemplates)))
+	// Threat Intelligence endpoints
+	mux.HandleFunc("/api/threat-intel/list", s.corsMiddleware(s.authMiddleware(s.handleGetThreatIntel)))
+	mux.HandleFunc("/api/threat-intel/view", s.corsMiddleware(s.authMiddleware(s.handleGetThreatIntelDetail)))
+	mux.HandleFunc("/api/threat-intel/top", s.corsMiddleware(s.authMiddleware(s.handleGetTopThreats)))
+	mux.HandleFunc("/api/threat-intel/stats", s.corsMiddleware(s.authMiddleware(s.handleGetThreatIntelStats)))
+	// Notification configuration endpoints
+	mux.HandleFunc("/api/notifications/config", s.corsMiddleware(s.authMiddleware(s.handleGetNotificationConfig)))
+	mux.HandleFunc("/api/notifications/config/update", s.corsMiddleware(s.authMiddleware(s.handleUpdateNotificationConfig)))
+	mux.HandleFunc("/api/notifications/history", s.corsMiddleware(s.authMiddleware(s.handleGetNotificationHistory)))
 	mux.HandleFunc("/api/users", s.corsMiddleware(s.authMiddleware(s.handleGetUsers)))
 	mux.HandleFunc("/api/users/create", s.corsMiddleware(s.authMiddleware(s.handleCreateUser)))
 	mux.HandleFunc("/api/tokens", s.corsMiddleware(s.authMiddleware(s.handleGetTokens)))
@@ -141,11 +150,12 @@ func (s *APIServer) handleDashboard(w http.ResponseWriter, r *http.Request) {
         <div class="mb-8 flex items-center justify-between">
             <div>
                 <h1 class="text-4xl font-bold bg-gradient-to-r from-red-500 to-orange-500 bg-clip-text text-transparent">IFRIT Dashboard</h1>
-                <p class="text-gray-400 text-sm mt-1">Real-time Threat Detection</p>
+                <p class="text-gray-400 text-sm mt-1">Real-time Threat Detection & Intelligence</p>
             </div>
             <button onclick="logout()" class="bg-gray-800 hover:bg-gray-700 text-gray-300 px-4 py-2 rounded text-sm">Logout</button>
         </div>
 
+        <!-- Attack Statistics -->
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
             <div class="bg-red-500/10 border border-gray-700 rounded-lg p-6">
                 <p class="text-gray-400 text-sm mb-1">Total Attacks</p>
@@ -161,6 +171,7 @@ func (s *APIServer) handleDashboard(w http.ResponseWriter, r *http.Request) {
             </div>
         </div>
 
+        <!-- Detection Stages -->
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-8">
             <div class="bg-gray-900 border border-gray-800 rounded-lg p-6">
                 <div class="flex items-center gap-4">
@@ -182,6 +193,27 @@ func (s *APIServer) handleDashboard(w http.ResponseWriter, r *http.Request) {
             </div>
         </div>
 
+        <!-- Threat Intelligence Statistics -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+            <div class="bg-gray-800/50 border border-red-700/50 rounded-lg p-6">
+                <p class="text-red-400 text-sm mb-1">🚨 CRITICAL Threats</p>
+                <p class="text-3xl font-bold text-red-500" id="threatCritical">0</p>
+            </div>
+            <div class="bg-gray-800/50 border border-orange-700/50 rounded-lg p-6">
+                <p class="text-orange-400 text-sm mb-1">⚠️ HIGH Threats</p>
+                <p class="text-3xl font-bold text-orange-500" id="threatHigh">0</p>
+            </div>
+            <div class="bg-gray-800/50 border border-yellow-700/50 rounded-lg p-6">
+                <p class="text-yellow-400 text-sm mb-1">⚡ MEDIUM Threats</p>
+                <p class="text-3xl font-bold text-yellow-500" id="threatMedium">0</p>
+            </div>
+            <div class="bg-gray-800/50 border border-green-700/50 rounded-lg p-6">
+                <p class="text-green-400 text-sm mb-1">ℹ️ LOW Threats</p>
+                <p class="text-3xl font-bold text-green-500" id="threatLow">0</p>
+            </div>
+        </div>
+
+        <!-- Recent Attacks -->
         <div class="bg-gray-900 border border-gray-800 rounded-lg p-6 mb-8">
             <h2 class="text-xl font-bold mb-4">Recent Attacks</h2>
             <div class="overflow-x-auto">
@@ -194,6 +226,13 @@ func (s *APIServer) handleDashboard(w http.ResponseWriter, r *http.Request) {
             </div>
         </div>
 
+        <!-- Top Risky IPs (Threat Intelligence) -->
+        <div class="bg-gray-900 border border-gray-800 rounded-lg p-6 mb-8">
+            <h2 class="text-xl font-bold mb-4">🔥 Top Risky IPs (Threat Intelligence)</h2>
+            <div class="space-y-2" id="topRiskyIPs"><div class="text-center py-4 text-gray-500">Loading...</div></div>
+        </div>
+
+        <!-- Top Attackers -->
         <div class="bg-gray-900 border border-gray-800 rounded-lg p-6">
             <h2 class="text-xl font-bold mb-4">Top Attackers</h2>
             <div class="space-y-3" id="attackersList"><div class="text-center py-4 text-gray-500">Loading...</div></div>
@@ -257,7 +296,12 @@ func (s *APIServer) handleDashboard(w http.ResponseWriter, r *http.Request) {
         async function fetchData() {
             const attacks = await fetchWithAuth(API_BASE + '/api/attacks?limit=100');
             if (!attacks) return;
+            
             const attackers = await fetchWithAuth(API_BASE + '/api/attackers');
+            const threatIntel = await fetchWithAuth(API_BASE + '/api/threat-intel/stats');
+            const topThreats = await fetchWithAuth(API_BASE + '/api/threat-intel/top?limit=5');
+
+            // Update attack stats
             const stage1 = attacks.filter(a => a.detection_stage === 1).length;
             const stage2 = attacks.filter(a => a.detection_stage === 2).length;
             const stage3 = attacks.filter(a => a.detection_stage === 3).length;
@@ -267,6 +311,15 @@ func (s *APIServer) handleDashboard(w http.ResponseWriter, r *http.Request) {
             document.getElementById('stage2').textContent = stage2;
             document.getElementById('stage3').textContent = stage3;
 
+            // Update threat intelligence stats
+            if (threatIntel) {
+                document.getElementById('threatCritical').textContent = threatIntel.critical || 0;
+                document.getElementById('threatHigh').textContent = threatIntel.high || 0;
+                document.getElementById('threatMedium').textContent = threatIntel.medium || 0;
+                document.getElementById('threatLow').textContent = threatIntel.low || 0;
+            }
+
+            // Update attacks table
             const attacksTable = document.getElementById('attacksTable');
             if (attacks && attacks.length > 0) {
                 let html = '';
@@ -279,6 +332,32 @@ func (s *APIServer) handleDashboard(w http.ResponseWriter, r *http.Request) {
                 attacksTable.innerHTML = '<tr><td colspan="5" class="text-center py-4 text-gray-500">No attacks</td></tr>';
             }
 
+            // Update top risky IPs
+            const topRiskyIPs = document.getElementById('topRiskyIPs');
+            if (topThreats && topThreats.length > 0) {
+                let html = '';
+                for (let i = 0; i < topThreats.length; i++) {
+                    const threat = topThreats[i];
+                    let threatColor = 'text-green-400';
+                    let threatBg = 'bg-green-500/20';
+                    if (threat.threat_level === 'CRITICAL') {
+                        threatColor = 'text-red-400';
+                        threatBg = 'bg-red-500/20';
+                    } else if (threat.threat_level === 'HIGH') {
+                        threatColor = 'text-orange-400';
+                        threatBg = 'bg-orange-500/20';
+                    } else if (threat.threat_level === 'MEDIUM') {
+                        threatColor = 'text-yellow-400';
+                        threatBg = 'bg-yellow-500/20';
+                    }
+                    html += '<div class="flex items-center justify-between p-3 bg-gray-800/50 rounded border border-gray-700"><div><p class="font-mono text-orange-400">' + threat.ip_address + '</p><p class="text-xs text-gray-400">' + threat.country + ' | AbuseIPDB: ' + threat.abuseipdb_reports + ' reports</p></div><div class="text-right"><p class="' + threatColor + ' font-bold">' + threat.risk_score + '/100</p><span class="' + threatBg + ' ' + threatColor + ' px-2 py-1 rounded text-xs">' + threat.threat_level + '</span></div></div>';
+                }
+                topRiskyIPs.innerHTML = html;
+            } else {
+                topRiskyIPs.innerHTML = '<div class="text-center py-4 text-gray-500">No threats detected</div>';
+            }
+
+            // Update attackers list
             const attackersList = document.getElementById('attackersList');
             if (attackers && attackers.length > 0) {
                 let html = '';
@@ -301,6 +380,7 @@ func (s *APIServer) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, dashboardHTML)
 }
+
 
 // handleHealth returns health status
 func (s *APIServer) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -763,4 +843,338 @@ func generateRandomToken(length int) string {
 		b[i] = charset[i%len(charset)]
 	}
 	return "ifr_" + string(b)
+}
+
+// handleGetThreatIntel returns threat intelligence data
+func (s *APIServer) handleGetThreatIntel(w http.ResponseWriter, r *http.Request) {
+	appID := r.URL.Query().Get("app_id")
+	if appID == "" {
+		appID = r.Header.Get("X-User-App-ID")
+	}
+	if appID == "" {
+		appID = "default"
+	}
+
+	limit := 50
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 1000 {
+			limit = parsed
+		}
+	}
+
+	// Query threat intelligence from database
+	rows, err := s.db.GetDB().Query(`
+		SELECT ip_address, risk_score, threat_level, abuseipdb_score, abuseipdb_reports, 
+		       virustotal_malicious, virustotal_suspicious, country, last_seen 
+		FROM threat_intelligence 
+		WHERE app_id = ? 
+		ORDER BY last_seen DESC 
+		LIMIT ?
+	`, appID, limit)
+
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+
+	var threatData []map[string]interface{}
+	for rows.Next() {
+		var ipAddress string
+		var riskScore, abuseScore, abuseReports, vtMalicious, vtSuspicious int
+		var threatLevel, country, lastSeen string
+
+		if err := rows.Scan(&ipAddress, &riskScore, &threatLevel, &abuseScore, &abuseReports,
+			&vtMalicious, &vtSuspicious, &country, &lastSeen); err != nil {
+			continue
+		}
+
+		threatData = append(threatData, map[string]interface{}{
+			"ip_address":           ipAddress,
+			"risk_score":           riskScore,
+			"threat_level":         threatLevel,
+			"abuseipdb_score":      abuseScore,
+			"abuseipdb_reports":    abuseReports,
+			"virustotal_malicious": vtMalicious,
+			"virustotal_suspicious": vtSuspicious,
+			"country":              country,
+			"last_seen":            lastSeen,
+		})
+	}
+
+	if threatData == nil {
+		threatData = []map[string]interface{}{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(threatData)
+}
+
+// handleGetThreatIntelDetail returns details for a specific IP
+func (s *APIServer) handleGetThreatIntelDetail(w http.ResponseWriter, r *http.Request) {
+	ip := r.URL.Query().Get("ip")
+	if ip == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "IP address required"})
+		return
+	}
+
+	appID := r.URL.Query().Get("app_id")
+	if appID == "" {
+		appID = r.Header.Get("X-User-App-ID")
+	}
+	if appID == "" {
+		appID = "default"
+	}
+
+	var threatDetail map[string]interface{}
+	err := s.db.GetDB().QueryRow(`
+		SELECT ip_address, risk_score, threat_level, abuseipdb_score, abuseipdb_reports,
+		       virustotal_malicious, virustotal_suspicious, ipinfo_city, ipinfo_country, 
+		       last_seen, created_at
+		FROM threat_intelligence
+		WHERE ip_address = ? AND app_id = ?
+	`, ip, appID).Scan(
+		&threatDetail, &threatDetail, &threatDetail, &threatDetail, &threatDetail,
+		&threatDetail, &threatDetail, &threatDetail, &threatDetail, &threatDetail, &threatDetail,
+	)
+
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Threat intel not found"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(threatDetail)
+}
+
+// handleGetTopThreats returns top threats by risk score
+func (s *APIServer) handleGetTopThreats(w http.ResponseWriter, r *http.Request) {
+	appID := r.URL.Query().Get("app_id")
+	if appID == "" {
+		appID = r.Header.Get("X-User-App-ID")
+	}
+	if appID == "" {
+		appID = "default"
+	}
+
+	limit := 10
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 100 {
+			limit = parsed
+		}
+	}
+
+	rows, err := s.db.GetDB().Query(`
+		SELECT ip_address, risk_score, threat_level, abuseipdb_reports, 
+		       virustotal_malicious, country, last_seen
+		FROM threat_intelligence
+		WHERE app_id = ?
+		ORDER BY risk_score DESC
+		LIMIT ?
+	`, appID, limit)
+
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+
+	var topThreats []map[string]interface{}
+	for rows.Next() {
+		var ipAddress, threatLevel, country, lastSeen string
+		var riskScore, abuseReports, vtMalicious int
+
+		if err := rows.Scan(&ipAddress, &riskScore, &threatLevel, &abuseReports,
+			&vtMalicious, &country, &lastSeen); err != nil {
+			continue
+		}
+
+		topThreats = append(topThreats, map[string]interface{}{
+			"ip_address":          ipAddress,
+			"risk_score":          riskScore,
+			"threat_level":        threatLevel,
+			"abuseipdb_reports":   abuseReports,
+			"virustotal_malicious": vtMalicious,
+			"country":             country,
+			"last_seen":           lastSeen,
+		})
+	}
+
+	if topThreats == nil {
+		topThreats = []map[string]interface{}{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(topThreats)
+}
+
+// handleGetThreatIntelStats returns threat intelligence statistics
+func (s *APIServer) handleGetThreatIntelStats(w http.ResponseWriter, r *http.Request) {
+	appID := r.URL.Query().Get("app_id")
+	if appID == "" {
+		appID = r.Header.Get("X-User-App-ID")
+	}
+	if appID == "" {
+		appID = "default"
+	}
+
+	var totalIPs, criticalCount, highCount, mediumCount, lowCount int
+
+	s.db.GetDB().QueryRow(`SELECT COUNT(*) FROM threat_intelligence WHERE app_id = ?`, appID).Scan(&totalIPs)
+	s.db.GetDB().QueryRow(`SELECT COUNT(*) FROM threat_intelligence WHERE app_id = ? AND threat_level = 'CRITICAL'`, appID).Scan(&criticalCount)
+	s.db.GetDB().QueryRow(`SELECT COUNT(*) FROM threat_intelligence WHERE app_id = ? AND threat_level = 'HIGH'`, appID).Scan(&highCount)
+	s.db.GetDB().QueryRow(`SELECT COUNT(*) FROM threat_intelligence WHERE app_id = ? AND threat_level = 'MEDIUM'`, appID).Scan(&mediumCount)
+	s.db.GetDB().QueryRow(`SELECT COUNT(*) FROM threat_intelligence WHERE app_id = ? AND threat_level = 'LOW'`, appID).Scan(&lowCount)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"total_ips":      totalIPs,
+		"critical":       criticalCount,
+		"high":           highCount,
+		"medium":         mediumCount,
+		"low":            lowCount,
+		"timestamp":      time.Now(),
+	})
+}
+
+// handleGetNotificationConfig returns notification configuration
+func (s *APIServer) handleGetNotificationConfig(w http.ResponseWriter, r *http.Request) {
+	appID := r.URL.Query().Get("app_id")
+	if appID == "" {
+		appID = "default"
+	}
+
+	role := r.Header.Get("X-User-Role")
+	if role != "admin" && role != "analyst" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Admin or analyst role required"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"app_id":          appID,
+		"email_enabled":   false,
+		"slack_enabled":   false,
+		"twilio_enabled":  true,
+		"webhook_enabled": true,
+		"alert_on_critical":  true,
+		"alert_on_high":      false,
+		"alert_on_medium":    false,
+		"alert_on_low":       false,
+	})
+}
+
+// handleUpdateNotificationConfig updates notification configuration
+func (s *APIServer) handleUpdateNotificationConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]string{"error": "POST required"})
+		return
+	}
+
+	role := r.Header.Get("X-User-Role")
+	if role != "admin" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Admin role required"})
+		return
+	}
+
+	var payload struct {
+		AppID              string `json:"app_id"`
+		AlertOnCritical    bool   `json:"alert_on_critical"`
+		AlertOnHigh        bool   `json:"alert_on_high"`
+		AlertOnMedium      bool   `json:"alert_on_medium"`
+		AlertOnLow         bool   `json:"alert_on_low"`
+		EmailEnabled       bool   `json:"email_enabled"`
+		SlackEnabled       bool   `json:"slack_enabled"`
+		TwilioEnabled      bool   `json:"twilio_enabled"`
+		WebhookEnabled     bool   `json:"webhook_enabled"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid JSON"})
+		return
+	}
+
+	// Store in database or memory
+	// For now, return success
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "ok",
+		"message": "Notification config updated",
+		"config":  payload,
+	})
+}
+
+// handleGetNotificationHistory returns notification send history
+func (s *APIServer) handleGetNotificationHistory(w http.ResponseWriter, r *http.Request) {
+	appID := r.URL.Query().Get("app_id")
+	if appID == "" {
+		appID = r.Header.Get("X-User-App-ID")
+	}
+	if appID == "" {
+		appID = "default"
+	}
+
+	limit := 50
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 1000 {
+			limit = parsed
+		}
+	}
+
+	rows, err := s.db.GetDB().Query(`
+		SELECT threat_level, source_ip, attack_type, notification_type, status, sent_at
+		FROM notification_history
+		WHERE app_id = ?
+		ORDER BY sent_at DESC
+		LIMIT ?
+	`, appID, limit)
+
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+
+	var history []map[string]interface{}
+	for rows.Next() {
+		var threatLevel, sourceIP, attackType, notificationType, status, sentAt string
+
+		if err := rows.Scan(&threatLevel, &sourceIP, &attackType, &notificationType, &status, &sentAt); err != nil {
+			continue
+		}
+
+		history = append(history, map[string]interface{}{
+			"threat_level":       threatLevel,
+			"source_ip":          sourceIP,
+			"attack_type":        attackType,
+			"notification_type": notificationType,
+			"status":             status,
+			"sent_at":            sentAt,
+		})
+	}
+
+	if history == nil {
+		history = []map[string]interface{}{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(history)
 }

@@ -243,6 +243,40 @@ func createAllTables(db *sql.DB) error {
 			)`,
 		},
 		{
+                        name: "threat_intelligence",
+			schema: `CREATE TABLE IF NOT EXISTS threat_intelligence (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				app_id TEXT DEFAULT 'default',	
+				source_ip TEXT NOT NULL,
+				risk_score INTEGER DEFAULT 0,
+				threat_level TEXT,
+				abuseipdb_score REAL,
+				abuseipdb_reports INTEGER,
+				abuseipdb_last_reported TEXT,
+				virustotal_malicious INTEGER,
+				virustotal_suspicious INTEGER,
+				virustotal_harmless INTEGER,
+				virustotal_undetected INTEGER,
+				ipinfo_country TEXT,
+				ipinfo_city TEXT,
+				ipinfo_org TEXT,
+				ipinfo_privacy_type TEXT,
+				is_vpn BOOLEAN DEFAULT 0,
+				is_proxy BOOLEAN DEFAULT 0,
+				is_hosting BOOLEAN DEFAULT 0,
+				is_tor BOOLEAN DEFAULT 0,
+				enriched_at TIMESTAMP,
+				cached_until TIMESTAMP,
+				last_attack_at TIMESTAMP,
+				total_attacks INTEGER DEFAULT 0,
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				
+				UNIQUE(app_id, source_ip),
+				FOREIGN KEY(app_id, source_ip) REFERENCES attacker_profiles(app_id, source_ip)                       
+                        )`,     
+                },
+		{
 			name: "intel_collection_templates",
 			schema: `CREATE TABLE IF NOT EXISTS intel_collection_templates (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -345,6 +379,11 @@ func createIndexes(db *sql.DB) error {
 		{"idx_token_hash", "CREATE INDEX IF NOT EXISTS idx_token_hash ON api_tokens(token_hash)"},
 		{"idx_token_user", "CREATE INDEX IF NOT EXISTS idx_token_user ON api_tokens(user_id, is_active)"},
 		{"idx_token_app", "CREATE INDEX IF NOT EXISTS idx_token_app ON api_tokens(app_id)"},
+		{"idx_threat_ip", "CREATE INDEX IF NOT EXISTS idx_threat_ip ON threat_intelligence(app_id, source_ip)"},
+		{"idx_threat_risk_score", "CREATE INDEX IF NOT EXISTS idx_threat_risk_score ON threat_intelligence(app_id, risk_score DESC)"},
+		{"idx_threat_cached_until", "CREATE INDEX IF NOT EXISTS idx_threat_cached_until ON threat_intelligence(cached_until)"},
+		{"idx_threat_updated", "CREATE INDEX IF NOT EXISTS idx_threat_updated ON threat_intelligence(updated_at DESC)"},
+
 	}
 
 	for _, idx := range indexes {

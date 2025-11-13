@@ -143,6 +143,18 @@ Manage attacks, patterns, attackers, exceptions, keyword exceptions, intel templ
 		&cobra.Command{Use: "by-ip [ip]", Short: "Interactions from IP", Args: cobra.ExactArgs(1), Run: interactionsByIP},
 	)
 
+	// Threat Intelligence commands
+	threatCmd := &cobra.Command{
+		Use:   "threat",
+		Short: "Query threat intelligence data",
+	}
+	threatCmd.AddCommand(
+		&cobra.Command{Use: "list", Short: "List all enriched threats", Run: listThreats},
+		&cobra.Command{Use: "view [ip]", Short: "View threat details for IP", Args: cobra.ExactArgs(1), Run: viewThreat},
+		&cobra.Command{Use: "top [limit]", Short: "Top threats by risk score", Args: cobra.MaximumNArgs(1), Run: topThreats},
+		&cobra.Command{Use: "stats", Short: "Threat intelligence statistics", Run: threatStats},
+	)
+
 	// Database commands
 	dbCmd := &cobra.Command{
 		Use:   "db",
@@ -165,7 +177,7 @@ Manage attacks, patterns, attackers, exceptions, keyword exceptions, intel templ
 		&cobra.Command{Use: "validate [token]", Short: "Validate API token", Args: cobra.ExactArgs(1), Run: validateToken},
 	)
 
-	rootCmd.AddCommand(attackCmd, patternCmd, attackerCmd, exceptionCmd, keywordCmd, intelCmd, payloadCmd, legitimateCmd, interactionCmd, dbCmd, tokenCmd)
+	rootCmd.AddCommand(attackCmd, patternCmd, attackerCmd, exceptionCmd, keywordCmd, intelCmd, payloadCmd, legitimateCmd, interactionCmd, threatCmd, dbCmd, tokenCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
@@ -1043,10 +1055,190 @@ func interactionsByIP(cmd *cobra.Command, args []string) {
 	fmt.Printf("\nTotal: %d\n", count)
 }
 
+// ============== THREAT INTELLIGENCE COMMANDS ==============
+
+func listThreats(cmd *cobra.Command, args []string) {
+	rows, err := db.Query(`
+		SELECT id, source_ip, risk_score, threat_level, ipinfo_country, total_attacks, updated_at
+		FROM threat_intelligence ORDER BY risk_score DESC LIMIT 50
+	`)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+	defer rows.Close()
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "ID\tIP ADDRESS\tRISK SCORE\tTHREAT LEVEL\tCOUNTRY\tATTACKS\tUPDATED")
+
+	count := 0
+	for rows.Next() {
+		var id, riskScore, totalAttacks int
+		var sourceIP, threatLevel, country, updatedAt string
+		rows.Scan(&id, &sourceIP, &riskScore, &threatLevel, &country, &totalAttacks, &updatedAt)
+		fmt.Fprintf(w, "%d\t%s\t%d\t%s\t%s\t%d\t%s\n", id, sourceIP, riskScore, threatLevel, country, totalAttacks, updatedAt)
+		count++
+	}
+	w.Flush()
+	fmt.Printf("\nTotal: %d enriched threats\n", count)
+}
+
+func viewThreat(cmd *cobra.Command, args []string) {
+	sourceIP := args[0]
+	var id, riskScore, abuseReports, vtMalicious, vtSuspicious, totalAttacks int
+	var abuseScore sql.NullFloat64
+	var isVPN, isProxy bool
+	var threatLevel, country, org, privacyType string
+	var enrichedAt, cachedUntil, lastAttackAt sql.NullString
+
+	err := db.QueryRow(`
+		SELECT id, risk_score, abuseipdb_score, abuseipdb_reports, virustotal_malicious, virustotal_suspicious,
+		       is_vpn, is_proxy, ipinfo_country, ipinfo_org, ipinfo_privacy_type, threat_level,
+		       enriched_at, cached_until, last_attack_at, total_attacks
+		FROM threat_intelligence WHERE source_ip = ?
+	`, sourceIP).Scan(&id, &riskScore, &abuseScore, &abuseReports, &vtMalicious, &vtSuspicious,
+		&isVPN, &isProxy, &country, &org, &privacyType, &threatLevel,
+		&enrichedAt, &cachedUntil, &lastAttackAt, &totalAttacks)
+
+	if err == sql.ErrNoRows {
+		fmt.Printf("✗ No threat intelligence for IP: %s\n", sourceIP)
+		return
+	}
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+
+	abuseScoreStr := "N/A"
+	if abuseScore.Valid {
+		abuseScoreStr = fmt.Sprintf("%.1f", abuseScore.Float64)
+	}
+
+	lastAttackStr := "Never"
+	if lastAttackAt.Valid {
+		lastAttackStr = lastAttackAt.String
+	}
+
+	enrichedStr := "N/A"
+	if enrichedAt.Valid {
+		enrichedStr = enrichedAt.String
+	}
+
+	cachedStr := "N/A"
+	if cachedUntil.Valid {
+		cachedStr = cachedUntil.String
+	}
+
+	vpnStr := "No"
+	if isVPN {
+		vpnStr = "Yes"
+	}
+
+	proxyStr := "No"
+	if isProxy {
+		proxyStr = "Yes"
+	}
+
+	fmt.Printf(`
+Threat Intelligence for %s
+==========================
+ID:                  %d
+Risk Score:          %d/100 (%s)
+Country:             %s
+Organization:        %s
+
+AbuseIPDB Data
+  Confidence Score:  %s
+  Reports:           %d
+
+VirusTotal Data
+  Malicious:         %d
+  Suspicious:        %d
+
+Privacy/Hosting
+  VPN:               %s
+  Proxy:             %s
+  Type:              %s
+
+Detection Stats
+  Total Attacks:     %d
+  Last Attack:       %s
+
+Cache Info
+  Enriched:          %s
+  Cache Until:       %s
+`, sourceIP, id, riskScore, threatLevel, country, org,
+		abuseScoreStr, abuseReports,
+		vtMalicious, vtSuspicious,
+		vpnStr, proxyStr, privacyType,
+		totalAttacks, lastAttackStr,
+		enrichedStr, cachedStr)
+}
+
+
+func topThreats(cmd *cobra.Command, args []string) {
+	limit := 10
+	if len(args) > 0 {
+		fmt.Sscanf(args[0], "%d", &limit)
+	}
+
+	rows, err := db.Query(`
+		SELECT id, source_ip, risk_score, threat_level, ipinfo_country, total_attacks, updated_at
+		FROM threat_intelligence ORDER BY risk_score DESC LIMIT ?
+	`, limit)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+	defer rows.Close()
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintf(w, "Top %d Threats by Risk Score\n", limit)
+	fmt.Fprintln(w, "RANK\tIP ADDRESS\tRISK SCORE\tTHREAT LEVEL\tCOUNTRY\tATTACKS")
+
+	rank := 1
+	for rows.Next() {
+		var id, riskScore, totalAttacks int
+		var sourceIP, threatLevel, country, updatedAt string
+		rows.Scan(&id, &sourceIP, &riskScore, &threatLevel, &country, &totalAttacks, &updatedAt)
+		fmt.Fprintf(w, "%d\t%s\t%d\t%s\t%s\t%d\n", rank, sourceIP, riskScore, threatLevel, country, totalAttacks)
+		rank++
+	}
+	w.Flush()
+}
+
+func threatStats(cmd *cobra.Command, args []string) {
+	var total, critical, high, medium, low int
+	var avgScore float64
+
+	db.QueryRow("SELECT COUNT(*) FROM threat_intelligence").Scan(&total)
+	db.QueryRow("SELECT COUNT(*) FROM threat_intelligence WHERE threat_level = 'CRITICAL'").Scan(&critical)
+	db.QueryRow("SELECT COUNT(*) FROM threat_intelligence WHERE threat_level = 'HIGH'").Scan(&high)
+	db.QueryRow("SELECT COUNT(*) FROM threat_intelligence WHERE threat_level = 'MEDIUM'").Scan(&medium)
+	db.QueryRow("SELECT COUNT(*) FROM threat_intelligence WHERE threat_level = 'LOW'").Scan(&low)
+	db.QueryRow("SELECT COALESCE(AVG(risk_score), 0) FROM threat_intelligence").Scan(&avgScore)
+
+	fmt.Printf(`
+Threat Intelligence Statistics
+===============================
+Total Enriched IPs:   %d
+Average Risk Score:   %.1f
+
+Threat Level Distribution
+  🔴 CRITICAL:        %d
+  🟠 HIGH:            %d
+  🟡 MEDIUM:          %d
+  🟢 LOW:             %d
+
+Status: Active enrichment workers running
+Cache TTL: 24 hours
+`, total, avgScore, critical, high, medium, low)
+}
+
 // ============== DATABASE COMMANDS ==============
 
 func dbStats(cmd *cobra.Command, args []string) {
-	var attacks, patterns, attackers, exceptions, keywords, intel, payloads, legitimate, interactions int
+	var attacks, patterns, attackers, exceptions, keywords, intel, payloads, legitimate, interactions, threats int
 
 	db.QueryRow("SELECT COUNT(*) FROM attack_instances").Scan(&attacks)
 	db.QueryRow("SELECT COUNT(*) FROM attack_patterns").Scan(&patterns)
@@ -1057,6 +1249,7 @@ func dbStats(cmd *cobra.Command, args []string) {
 	db.QueryRow("SELECT COUNT(*) FROM payload_templates").Scan(&payloads)
 	db.QueryRow("SELECT COUNT(*) FROM legitimate_requests").Scan(&legitimate)
 	db.QueryRow("SELECT COUNT(*) FROM attacker_interactions").Scan(&interactions)
+	db.QueryRow("SELECT COUNT(*) FROM threat_intelligence").Scan(&threats)
 
 	fileInfo, err := os.Stat("data/ifrit.db")
 	size := "unknown"
@@ -1070,6 +1263,7 @@ Database Statistics
 Attack Instances:      %d
 Attack Patterns:       %d
 Attacker Profiles:     %d
+Threat Intelligence:   %d
 Exceptions:            %d
 Keyword Exceptions:    %d
 Intel Templates:       %d
@@ -1077,18 +1271,21 @@ Payload Templates:     %d
 Legitimate Requests:   %d
 Attacker Interactions: %d
 Database Size:         %s
-`, attacks, patterns, attackers, exceptions, keywords, intel, payloads, legitimate, interactions, size)
+`, attacks, patterns, attackers, threats, exceptions, keywords, intel, payloads, legitimate, interactions, size)
 }
 
 func showSchema(cmd *cobra.Command, args []string) {
 	fmt.Println(`
-IFRIT Database Tables (Phase 1.1)
+IFRIT Database Tables (Phase 1.2)
 =================================
 
 CORE DETECTION
 - attack_instances      Recorded attacks & honeypots
 - attack_patterns       Known attack signatures
 - attacker_profiles     Attacker information & behavior
+
+THREAT INTELLIGENCE
+- threat_intelligence   Enriched IP data (AbuseIPDB, VirusTotal, IPinfo)
 
 WHITELISTING
 - exceptions            IP/path exceptions
@@ -1135,13 +1332,13 @@ func listTokens(cmd *cobra.Command, args []string) {
 		var id, userID int
 		var name, prefix, expiresAt, created string
 		rows.Scan(&id, &userID, &name, &prefix, &expiresAt, &created)
-		
+
 		expTime, _ := time.Parse(time.RFC3339, expiresAt)
 		status := "Active"
 		if time.Now().After(expTime) {
 			status = "EXPIRED"
 		}
-		
+
 		fmt.Fprintf(w, "%d\t%d\t%s\t%s...\t%s\t%s\n", id, userID, name, prefix, expiresAt, status)
 		count++
 	}
@@ -1152,7 +1349,7 @@ func listTokens(cmd *cobra.Command, args []string) {
 func createToken(cmd *cobra.Command, args []string) {
 	userID := args[0]
 	tokenName := args[1]
-	
+
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	b := make([]byte, 32)
 	for i := range b {
@@ -1165,12 +1362,12 @@ func createToken(cmd *cobra.Command, args []string) {
 		b[i] = charset[num.Int64()]
 	}
 	tokenString := "ifr_" + string(b)
-	
+
 	hash := sha256.Sum256([]byte(tokenString))
 	tokenHash := hex.EncodeToString(hash[:])
 	tokenPrefix := tokenString[:8]
 	expiresAt := time.Now().AddDate(0, 0, 90).Format(time.RFC3339)
-	
+
 	stmt, err := db.Prepare(`
 		INSERT INTO api_tokens (user_id, token_name, token_hash, token_prefix, app_id, permissions, expires_at, created_at)
 		VALUES (?, ?, ?, ?, 'default', '["read","write"]', ?, ?)
@@ -1180,14 +1377,14 @@ func createToken(cmd *cobra.Command, args []string) {
 		return
 	}
 	defer stmt.Close()
-	
+
 	now := time.Now().Format(time.RFC3339)
 	result, err := stmt.Exec(userID, tokenName, tokenHash, tokenPrefix, expiresAt, now)
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		return
 	}
-	
+
 	id, _ := result.LastInsertId()
 	fmt.Printf("✓ Token created successfully\n")
 	fmt.Printf("  ID:       %d\n", id)
@@ -1203,13 +1400,13 @@ func revokeToken(cmd *cobra.Command, args []string) {
 		return
 	}
 	defer stmt.Close()
-	
+
 	result, err := stmt.Exec(args[0])
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		return
 	}
-	
+
 	affected, _ := result.RowsAffected()
 	if affected > 0 {
 		fmt.Printf("✓ Token revoked\n")
@@ -1222,15 +1419,15 @@ func validateToken(cmd *cobra.Command, args []string) {
 	tokenString := args[0]
 	hash := sha256.Sum256([]byte(tokenString))
 	tokenHash := hex.EncodeToString(hash[:])
-	
+
 	var id, userID int
 	var tokenName, appID, permissions, expiresAt string
-	
+
 	err := db.QueryRow(`
 		SELECT id, user_id, token_name, app_id, permissions, expires_at
 		FROM api_tokens WHERE token_hash = ?
 	`, tokenHash).Scan(&id, &userID, &tokenName, &appID, &permissions, &expiresAt)
-	
+
 	if err == sql.ErrNoRows {
 		fmt.Printf("✗ Invalid token\n")
 		return
@@ -1239,13 +1436,13 @@ func validateToken(cmd *cobra.Command, args []string) {
 		fmt.Printf("Error: %v\n", err)
 		return
 	}
-	
+
 	expTime, _ := time.Parse(time.RFC3339, expiresAt)
 	status := "Valid"
 	if time.Now().After(expTime) {
 		status = "EXPIRED"
 	}
-	
+
 	fmt.Printf(`
 Token Validation
 ================

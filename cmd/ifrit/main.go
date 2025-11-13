@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/0tSystemsPublicRepos/ifrit/internal/anonymization"
 	"github.com/0tSystemsPublicRepos/ifrit/internal/api"
@@ -21,6 +22,8 @@ import (
 	"github.com/0tSystemsPublicRepos/ifrit/internal/llm"
 	"github.com/0tSystemsPublicRepos/ifrit/internal/logging"
 	"github.com/0tSystemsPublicRepos/ifrit/internal/payload"
+	"github.com/0tSystemsPublicRepos/ifrit/internal/threat_intelligence"
+	"github.com/0tSystemsPublicRepos/ifrit/internal/notifications"
 )
 
 func main() {
@@ -100,6 +103,18 @@ func main() {
 	payloadManager.SetLLMManager(llmManager)
 	fmt.Println("✓ Payload manager initialized")
 
+	// Initialize threat intelligence manager
+	fmt.Println("Initializing threat intelligence manager...")
+	tiManager := threat_intelligence.NewManager(&cfg.ThreatIntelligence, db)
+	tiManager.Start()
+	fmt.Println("✓ Threat Intelligence manager initialized")
+	defer tiManager.Stop()
+
+	// Initialize notification manager
+	fmt.Println("Initializing notification manager...")
+	notificationManager := notifications.NewManager(cfg, db)
+	fmt.Println("✓ Notification manager initialized")
+
 	// Set anonymization engine on Claude provider
 	if provider := llmManager.GetProvider("claude"); provider != nil {
 		if claudeProvider, ok := provider.(*llm.ClaudeProvider); ok {
@@ -166,6 +181,24 @@ func main() {
 			logging.Attack(clientIP, r.Method, r.URL.Path, "blocked_by_allowlist", "Allowlist Mode")
 			db.StoreAttackInstance(appID, 0, clientIP, "", r.URL.Path, r.Method)
 
+			// Enqueue threat intelligence enrichment
+			go tiManager.EnqueueEnrichment(appID, clientIP)
+
+			// Send notifications
+			go func() {
+				notificationManager.Send(&notifications.Notification{
+					AppID:       appID,
+					ThreatLevel: "HIGH",
+					RiskScore:   75,
+					SourceIP:    clientIP,
+					Country:     "Unknown",
+					AttackType:  "blocked_by_allowlist",
+					Path:        r.URL.Path,
+					Method:      r.Method,
+					Timestamp:   time.Now(),
+				})
+			}()
+
 			// Treat as attack and use payload management
 			payloadResp, err := payloadManager.GetPayloadForAttack(
 				payload.AttackerContext{
@@ -210,6 +243,24 @@ func main() {
 			logging.Attack(clientIP, r.Method, r.URL.Path, result.AttackType, "Stage 1: Local Rules")
 			db.StoreAttackInstance(appID, 0, clientIP, "", r.URL.Path, r.Method)
 
+			// Enqueue threat intelligence enrichment
+			go tiManager.EnqueueEnrichment(appID, clientIP)
+
+			// Send notifications
+			go func() {
+				notificationManager.Send(&notifications.Notification{
+					AppID:       appID,
+					ThreatLevel: "MEDIUM",
+					RiskScore:   50,
+					SourceIP:    clientIP,
+					Country:     "Unknown",
+					AttackType:  result.AttackType,
+					Path:        r.URL.Path,
+					Method:      r.Method,
+					Timestamp:   time.Now(),
+				})
+			}()
+
 			// Get payload response
 			payloadResp, err := payloadManager.GetPayloadForAttack(
 				payload.AttackerContext{
@@ -253,6 +304,24 @@ func main() {
 			// Normal/Learning mode: return honeypot
 			logging.Attack(clientIP, r.Method, r.URL.Path, result.AttackType, "Stage 2: Database Patterns")
 			db.StoreAttackInstance(appID, 0, clientIP, "", r.URL.Path, r.Method)
+
+			// Enqueue threat intelligence enrichment
+			go tiManager.EnqueueEnrichment(appID, clientIP)
+
+			// Send notifications
+			go func() {
+				notificationManager.Send(&notifications.Notification{
+					AppID:       appID,
+					ThreatLevel: "MEDIUM",
+					RiskScore:   50,
+					SourceIP:    clientIP,
+					Country:     "Unknown",
+					AttackType:  result.AttackType,
+					Path:        r.URL.Path,
+					Method:      r.Method,
+					Timestamp:   time.Now(),
+				})
+			}()
 
 			// Get payload response
 			payloadResp, err := payloadManager.GetPayloadForAttack(
@@ -312,6 +381,24 @@ func main() {
 				// Normal/Learning mode: return honeypot
 				logging.Attack(clientIP, r.Method, r.URL.Path, result.AttackType, "Stage 4: LLM Analysis")
 				db.StoreAttackInstance(appID, 0, clientIP, "", r.URL.Path, r.Method)
+
+				// Enqueue threat intelligence enrichment
+				go tiManager.EnqueueEnrichment(appID, clientIP)
+
+				// Send notifications
+				go func() {
+					notificationManager.Send(&notifications.Notification{
+						AppID:       appID,
+						ThreatLevel: "MEDIUM",
+						RiskScore:   50,
+						SourceIP:    clientIP,
+						Country:     "Unknown",
+						AttackType:  result.AttackType,
+						Path:        r.URL.Path,
+						Method:      r.Method,
+						Timestamp:   time.Now(),
+					})
+				}()
 
 				// Get payload response
 				payloadResp, err := payloadManager.GetPayloadForAttack(

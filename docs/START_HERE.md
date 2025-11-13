@@ -170,6 +170,105 @@ curl http://localhost:8080/.env
 ```
 
 ---
+## New in 0.2.0: Threat Intelligence & Notifications
+
+### Threat Intelligence System
+
+IFRIT now enriches detected attacks with data from:
+- **AbuseIPDB** - IP reputation and abuse history
+- **VirusTotal** - Malware detection
+- **IPInfo** - Geolocation and privacy detection (VPN/proxy/hosting)
+
+Each IP gets a **risk score (0-100)** and **threat level**:
+- 🚨 **CRITICAL** (80-100) - Immediate threat
+- ⚠️ **HIGH** (60-79) - Significant threat
+- ⚡ **MEDIUM** (40-59) - Notable activity
+- ℹ️ **LOW** (0-39) - Low risk
+
+**View threat intelligence:**
+```bash
+# List all enriched IPs
+./ifrit-cli threat list
+
+# Get details for specific IP
+./ifrit-cli threat view 192.168.1.100
+
+# See top 10 most dangerous IPs
+./ifrit-cli threat top 10
+
+# Get statistics
+./ifrit-cli threat stats
+```
+
+### Notification System with Rule-Based Filtering
+
+Control when you get alerts! IFRIT now supports multiple notification channels:
+
+**Available Channels:**
+- 📧 Email (SMTP)
+- 💬 Slack
+- 📱 SMS (Twilio)
+- 🔗 Custom Webhooks
+
+**Rule-Based Filtering:** Configure which threat levels trigger alerts:
+```json
+"notifications": {
+  "rules": {
+    "alert_on_critical": true,   // Always alert on CRITICAL
+    "alert_on_high": false,       // Skip HIGH alerts
+    "alert_on_medium": false,     // Skip MEDIUM alerts
+    "alert_on_low": false         // Skip LOW alerts
+  }
+}
+```
+
+**Example:** Only get notified of CRITICAL threats
+- SQL Injection with risk score 85 → ✅ SEND ALERT
+- XSS with risk score 50 → ❌ SKIP (MEDIUM, disabled)
+- Brute force with risk score 30 → ❌ SKIP (LOW, disabled)
+
+**View notification history:**
+```bash
+# Check what alerts were sent
+curl -H "X-API-Token: YOUR_TOKEN" \
+  http://localhost:8443/api/notifications/history
+```
+
+### Enhanced Dashboard
+
+The dashboard now shows:
+- 🚨 CRITICAL threat count
+- ⚠️ HIGH threat count
+- ⚡ MEDIUM threat count
+- ℹ️ LOW threat count
+- 🔥 **Top Risky IPs** - Most dangerous attackers with risk scores
+
+Access at: `http://localhost:8443/`
+
+### New API Endpoints
+```bash
+# Get threat intelligence statistics
+GET /api/threat-intel/stats
+
+# List all enriched IPs
+GET /api/threat-intel/list?limit=50
+
+# Get details for specific IP
+GET /api/threat-intel/view?ip=192.168.1.100
+
+# Get top threats by risk score
+GET /api/threat-intel/top?limit=10
+
+# View/update notification settings
+GET /api/notifications/config
+POST /api/notifications/config/update
+
+# Check notification history
+GET /api/notifications/history
+```
+
+---
+
 
 ## Recommended Deployment Path
 

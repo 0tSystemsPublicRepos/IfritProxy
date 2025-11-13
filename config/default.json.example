@@ -12,7 +12,6 @@
       "key_file": "/app/config/certs/server.key"
     }
   },
-
   "database": {
     "type": "sqlite",
     "sqlite": {
@@ -45,7 +44,6 @@
       "connection_max_lifetime": "1h"
     }
   },
-
   "apps": {
     "app1": {
       "proxy_target": "http://localhost:3000",
@@ -58,7 +56,6 @@
       "description": "Admin Panel"
     }
   },
-
   "api": {
     "listen_addr": ":8443",
     "authentication": {
@@ -72,7 +69,6 @@
       "requests_per_minute": 100
     }
   },
-
   "dashboard": {
     "enabled": true,
     "listen_addr": ":5601",
@@ -81,11 +77,10 @@
       "token_header": "X-Dashboard-Token"
     }
   },
-
   "llm": {
     "primary": "claude",
     "claude": {
-      "api_key": "_COPY_YOUR_ANTHROPIC_API_KEY_HERE",
+      "api_key": "${CLAUDE_API_KEY}",
       "model": "claude-3-5-haiku-20241022"
     },
     "gpt": {
@@ -93,31 +88,27 @@
       "model": "gpt-4o-mini"
     }
   },
-
   "detection": {
     "mode": "detection",
     "enable_local_rules": true,
     "enable_llm": true,
-    "llm_only_on": ["POST", "PUT", "DELETE"],
+    "llm_only_on": ["GET", "POST", "PUT", "DELETE"],
     "whitelist_ips": [],
     "whitelist_paths": [],
     "skip_body_check_on_whitelist": true
   },
-
   "execution_mode": {
     "mode": "detection",
     "onboarding_auto_whitelist": true,
     "onboarding_duration_days": 7,
     "onboarding_log_file": "./logs/onboarding_traffic.log"
   },
-
   "anonymization": {
     "enabled": true,
     "strategy": "hybrid",
     "store_original": true,
     "sensitive_headers": ["Authorization", "Cookie", "X-API-Key", "X-Auth-Token"]
   },
-
   "payload_management": {
     "enable_intel_collection": true,
     "intel_collection_payload_id": 1,
@@ -152,11 +143,79 @@
       }
     }
   },
-
   "system": {
     "home_dir": "./",
     "log_dir": "./logs",
     "log_level": "info",
     "debug": false
+  },
+  "threat_intelligence": {
+    "enabled": true,
+    "cache_ttl_hours": 24,
+    "enrichment_workers": 3,
+    "apis": {
+      "abuseipdb": {
+        "enabled": true,
+        "api_key": "${ABUSEIPDB_API_KEY}",
+        "timeout_seconds": 10
+      },
+      "virustotal": {
+        "enabled": true,
+        "api_key": "${VIRUSTOTAL_API_KEY}",
+        "timeout_seconds": 10
+      },
+      "ipinfo": {
+        "enabled": true,
+        "api_key": "${IPINFO_API_KEY}",
+        "timeout_seconds": 10
+      }
+    },
+    "risk_score_weights": {
+      "abuseipdb_score": 0.4,
+      "virustotal_detections": 0.35,
+      "ipinfo_risk": 0.25
+    },
+    "threat_level_thresholds": {
+      "critical": 80,
+      "high": 60,
+      "medium": 40,
+      "low": 0
+    }
+  },
+  "notifications": {
+    "enabled": true,
+    "providers": {
+      "email": {
+        "enabled": false,
+        "smtp_host": "smtp.gmail.com",
+        "smtp_port": 587,
+        "smtp_username": "${SMTP_USERNAME}",
+        "smtp_password": "${SMTP_PASSWORD}",
+        "from_address": "alerts@ifrit.local"
+      },
+      "slack": {
+        "enabled": false,
+        "webhook_url": "${SLACK_WEBHOOK_URL}"
+      },
+      "twilio": {
+        "enabled": false,
+        "account_sid": "${TWILIO_ACCOUNT_SID}",
+        "auth_token": "${TWILIO_AUTH_TOKEN}",
+        "from_number": "${TWILIO_FROM_NUMBER}",
+        "to_number": "${TWILIO_TO_NUMBER}"
+      }
+    },
+    "rules": {
+      "alert_on_critical": true,
+      "alert_on_high": false,
+      "alert_on_medium": false,
+      "alert_on_low": false
+    }
+  },
+  "webhooks": {
+    "enabled": true,
+    "retry_count": 3,
+    "retry_delay_seconds": 5,
+    "timeout_seconds": 10
   }
 }
