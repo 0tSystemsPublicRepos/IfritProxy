@@ -24,7 +24,7 @@ This is an open source project and we'll do our best to:
 
 | Version | Status | Support Until | Security Updates |
 |---------|--------|---------------|------------------|
-| 0.1.x   | Active | TBD           | Yes              |
+| 0.2.x   | Active | TBD           | Yes              |
 | 0.0.x   | EOL    | 2025-11-02    | No               |
 
 **Current Version:** 0.1.1 (Released 2025-11-07)
@@ -418,15 +418,15 @@ We currently do not have a formal bug bounty program, but we greatly appreciate 
 
 ### Anthropic Claude API
 
-IFRIT uses Anthropic's Claude API for LLM analysis.
+IFRIT uses Anthropic's Claude / Google Gemini API for AI analysis.
 
 **Security considerations:**
 - Sensitive data is anonymized before sending
-- Anthropic has SOC 2 Type II certification
-- Data is subject to Anthropic's privacy policy
-- Review Anthropic's security before deploying
+- Data is subject to Anthropic's + Google privacy policy
+- Review Anthropic's / Google's security before deploying
 
-**Link:** https://www.anthropic.com/security
+**Link:** [https://trust.anthropic.com](https://trust.anthropic.com)
+**Link:** [https://cloud.google.com/security/ai](https://cloud.google.com/security/ai)
 
 ### SQLite
 
@@ -470,5 +470,5 @@ This security policy is part of IFRIT Proxy under Apache License 2.0.
 
 ---
 
-**Last Updated:** November 7, 2025  
-**Version:** 0.1.1
+**Last Updated:** November 16, 2025  
+**Version:** 0.2.1
