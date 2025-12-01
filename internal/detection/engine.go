@@ -208,7 +208,7 @@ func (de *DetectionEngine) CheckDatabasePatterns(r *http.Request, appID string, 
 		}
 
 		// Check path
-		logging.Debug("[STAGE2] app_id=%s | Comparing: pathPattern='%s' == r.URL.Path='%s' | method='%s' == r.Method='%s'", appID, pathPattern, r.URL.Path, method, r.Method)
+// 		logging.Debug("[STAGE2] app_id=%s | Comparing: pathPattern='%s' == r.URL.Path='%s' | method='%s' == r.Method='%s'", appID, pathPattern, r.URL.Path, method, r.Method)
 		if pathPattern == r.URL.Path {
 			return &DetectionResult{
 				IsAttack:        true,

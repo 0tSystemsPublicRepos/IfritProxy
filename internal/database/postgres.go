@@ -342,6 +342,7 @@ func (pp *PostgresProvider) createAllTables() error {
 				is_active BOOLEAN DEFAULT TRUE,
 				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 				updated_at TIMESTAMP,
+payload_template TEXT,
 				created_by VARCHAR(255)
 			)`,
 		},

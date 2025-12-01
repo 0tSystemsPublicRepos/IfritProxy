@@ -286,6 +286,7 @@ func createAllTables(db *sql.DB) error {
 				is_active BOOLEAN DEFAULT 1,
 				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 				updated_at TIMESTAMP,
+payload_template TEXT,
 				created_by TEXT
 			)`,
 		},
