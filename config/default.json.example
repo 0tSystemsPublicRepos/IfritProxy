@@ -26,9 +26,18 @@
       "path": "./data/ifrit.db",
       "journal_mode": "WAL",
       "synchronous": "NORMAL"
+    },
+    "postgresql": {
+      "host": "localhost",
+      "port": 5432,
+      "database": "ifrit",
+      "username": "ifrit_user",
+      "password": "ifrit_password",
+      "ssl_mode": "disable",
+      "max_connections": 25
     }
   },
-
+ 
   "system": {
     "home_dir": "./",
     "log_dir": "./logs",
@@ -44,18 +53,18 @@
   "llm": {
     "primary": "claude",
     "claude": {
-      "api_key": "sk-ant-PUT_YOUR_API_KEY_HERE",
+      "api_key": "sk-ant-API_KEY_HERE,
       "model": "claude-3-5-haiku-20241022"
     },
     "gemini": {
-      "api_key": "PUT_YOUR_GEMINI_KEY_HERE",
+      "api_key": "API_KEY_HERE",
       "model": "gemini-2.5-flash"
     }
   },
 
   "detection": {
     "mode": "detection",
-    "enable_llm": false,
+    "enable_llm": true,
     "llm_only_on": ["GET", "POST", "PUT", "DELETE"],
     "enable_local_rules": true,
     "enable_db_patterns": true,
@@ -65,7 +74,7 @@
   },
 
   "anonymization": {
-    "enabled": false,
+    "enabled": true,
     "strategy": "hybrid",
     "store_original": true,
     "sensitive_headers": ["Authorization", "Cookie", "X-API-Key", "X-Auth-Token"]
@@ -80,7 +89,7 @@
 
   "payload_management": {
     "use_db_payloads": true,
-    "generate_dynamic_payload": false,
+    "generate_dynamic_payload": true,
     "cache_llm_payloads_to_db": true,
     "intel_collection_payload_id": 1,
     "default_responses": {
@@ -118,17 +127,17 @@
     "apis": {
       "abuseipdb": {
         "enabled": false,
-        "api_key": "PUT_YOUR_API_KEY_HERE",
+        "api_key": "API_KEY_HERE",
         "timeout_seconds": 10
       },
       "virustotal": {
         "enabled": false,
-        "api_key": "PUT_YOUR_API_KEY_HERE",
+        "api_key": "API_KEY_HERE",
         "timeout_seconds": 10
       },
       "ipinfo": {
         "enabled": false,
-        "api_key": "PUT_YOUR_API_KEY_HERE",
+        "api_key": "API_KEY_HERE",
         "timeout_seconds": 10
       }
     },
@@ -150,12 +159,12 @@
     "providers": {
       "email": {
         "enabled": false,
-        "smtp_host": "CHANGE_THIS",
+        "smtp_host": "sandbox.smtp.mailtrap.io",
         "smtp_port": 2525,
-        "smtp_user": "CHANGE_THIS",
-        "smtp_password": "CHANGE_THIS",
-        "from_address": "CHANGE_THIS",
-        "to_addresses": ["CHANGE_THIS"]
+        "smtp_user": "USER_HERE",
+        "smtp_password": "PASSWD_HERE",
+        "from_address": "alerts@ifrit.local",
+        "to_addresses": ["security@example.com"]
       },
       "slack": {
         "enabled": false,
@@ -163,14 +172,14 @@
       },
       "twilio": {
         "enabled": false,
-        "account_sid": "CHANGE_THIS",
-        "auth_token": "CHANGE_THIS",
+        "account_sid": "SID",
+        "auth_token": "TOKEN",
         "from_number": "+1 xxx xxx xxxx",
         "to_numbers": ["+1 xxx xxx xxxx"]
       },
       "webhook": {
         "enabled": false,
-        "url": "WEBHOOK_ADDRESS_ENDPOINT_HERE",
+        "url": "https://webhook.site/your-unique-id",
         "retry_count": 3,
         "retry_delay_seconds": 5
       }
