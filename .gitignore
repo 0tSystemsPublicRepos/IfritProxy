@@ -76,3 +76,6 @@ config/default.yml
 !config/default.json.example
 !config/default.yaml.example
 !config/default.yml.example
+
+# Release binaries and packages
+releases/
