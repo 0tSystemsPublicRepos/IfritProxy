@@ -573,9 +573,16 @@ func (de *DetectionEngine) generateBodySignature(r *http.Request) string {
 		r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 		body = string(bodyBytes)
 	}
+	
+	// Include query parameters in signature
+	if r.URL.RawQuery != "" {
+		body += "|QUERY:" + r.URL.RawQuery
+	}
+	
 	hash := md5.Sum([]byte(body))
 	return hex.EncodeToString(hash[:])
 }
+
 
 // generateHeadersSignature generates signature for important headers
 func (de *DetectionEngine) generateHeadersSignature(r *http.Request) string {

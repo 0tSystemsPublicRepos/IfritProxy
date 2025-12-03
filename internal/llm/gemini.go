@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/0tSystemsPublicRepos/ifrit/internal/anonymization"
 	"github.com/0tSystemsPublicRepos/ifrit/internal/logging"
@@ -63,6 +64,10 @@ func (gp *GeminiProvider) SetAnonymizationEngine(engine *anonymization.Anonymiza
 
 func (gp *GeminiProvider) SetIntelTemplates(templates []map[string]interface{}) {
 	gp.intelTemplates = templates
+}
+
+func (gp *GeminiProvider) GetIntelTemplates() []map[string]interface{} {
+	return gp.intelTemplates
 }
 
 func (gp *GeminiProvider) AnalyzeRequest(requestData map[string]string) (*AnalysisResult, error) {
@@ -131,7 +136,6 @@ Be strict. Return true only for clear attacks.`,
 		return nil, err
 	}
 
-	// Add detailed logging
 	logging.Debug("[GEMINI] Response candidates count: %d", len(geminiResp.Candidates))
 	if len(geminiResp.Candidates) > 0 {
 		logging.Debug("[GEMINI] First candidate content parts: %d", len(geminiResp.Candidates[0].Content.Parts))
@@ -146,10 +150,8 @@ Be strict. Return true only for clear attacks.`,
 		return nil, fmt.Errorf("empty response from Gemini")
 	}
 
-	// Get the text response
 	responseText := geminiResp.Candidates[0].Content.Parts[0].Text
 
-	// Strip markdown code blocks (```json ... ```)
 	responseText = strings.TrimPrefix(responseText, "```json\n")
 	responseText = strings.TrimPrefix(responseText, "```json")
 	responseText = strings.TrimSuffix(responseText, "\n```")
@@ -158,7 +160,6 @@ Be strict. Return true only for clear attacks.`,
 
 	logging.Debug("[GEMINI] Raw response (after markdown strip): %s", responseText)
 
-	// Parse the JSON response
 	var result AnalysisResult
 	if err := json.Unmarshal([]byte(responseText), &result); err != nil {
 		logging.Error("[GEMINI] Failed to parse JSON analysis: %v. Raw: %s", err, responseText)
@@ -173,53 +174,218 @@ Be strict. Return true only for clear attacks.`,
 }
 
 func (gp *GeminiProvider) GeneratePayload(attackType string) (map[string]interface{}, error) {
+	return gp.GeneratePayloadWithContext(attackType, "", "")
+}
+
+func (gp *GeminiProvider) GeneratePayloadWithContext(attackType, path, method string) (map[string]interface{}, error) {
+	prompt := gp.buildPayloadPrompt(attackType, path, method)
+
+	geminiReq := GeminiRequest{
+		Contents: []GeminiContent{
+			{
+				Parts: []GeminiPart{
+					{
+						Text: prompt,
+					},
+				},
+			},
+		},
+	}
+
+	reqBody, _ := json.Marshal(geminiReq)
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", gp.model, gp.apiKey)
+
+	httpReq, _ := http.NewRequest("POST", url, bytes.NewBuffer(reqBody))
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		logging.Error("[GEMINI][PAYLOAD] Failed to call Gemini API for payload generation: %v", err)
+		return gp.getFallbackPayload(attackType), nil
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	logging.Debug("[GEMINI][PAYLOAD] HTTP Status: %d", resp.StatusCode)
+
+	var geminiResp GeminiResponse
+	if err := json.Unmarshal(body, &geminiResp); err != nil {
+		logging.Error("[GEMINI][PAYLOAD] Failed to parse Gemini response: %v", err)
+		return gp.getFallbackPayload(attackType), nil
+	}
+
+	if len(geminiResp.Candidates) == 0 || len(geminiResp.Candidates[0].Content.Parts) == 0 {
+		logging.Error("[GEMINI][PAYLOAD] Empty response from Gemini")
+		return gp.getFallbackPayload(attackType), nil
+	}
+
+	responseText := geminiResp.Candidates[0].Content.Parts[0].Text
+
+	responseText = strings.TrimPrefix(responseText, "```json\n")
+	responseText = strings.TrimPrefix(responseText, "```json")
+	responseText = strings.TrimSuffix(responseText, "\n```")
+	responseText = strings.TrimSuffix(responseText, "```")
+	responseText = strings.TrimSpace(responseText)
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(responseText), &payload); err != nil {
+		logging.Error("[GEMINI][PAYLOAD] Failed to parse generated payload JSON: %v. Raw: %s", err, responseText)
+		return gp.getFallbackPayload(attackType), nil
+	}
+
+	logging.Info("[GEMINI][PAYLOAD] Successfully generated dynamic payload for attack type: %s", attackType)
+	return payload, nil
+}
+
+func (gp *GeminiProvider) buildPayloadPrompt(attackType, path, method string) string {
+	basePrompt := `You are a cybersecurity deception system. Generate a realistic but FAKE HTTP response payload that would deceive an attacker.
+
+CRITICAL RULES:
+1. Response must be valid JSON only
+2. Data must appear realistic but be completely fabricated
+3. Include appropriate error messages or data for the attack type
+4. Add realistic timestamps, IDs, and metadata
+5. Make the attacker think they're succeeding (to waste their time)
+6. NEVER include actual sensitive data
+7. Vary the response - don't use generic templates
+
+Attack Type: %s
+Endpoint Path: %s
+HTTP Method: %s
+
+ATTACK-SPECIFIC GUIDELINES:
+`
+
+	switch attackType {
+	case "SQL Injection":
+		basePrompt += `- Generate fake database error messages OR fake query results
+- Include realistic table names, column names, row counts
+- Add SQL error codes (e.g., 1064, 1146, 1054)
+- Include fake database version info
+- Example structure: {"error": "SQL syntax error", "code": 1064, "query": "...", "affected_rows": 0}`
+
+	case "Local File Inclusion", "Path Traversal":
+		basePrompt += `- Generate fake file contents or permission errors
+- Include realistic file paths, permissions, timestamps
+- Add fake file metadata (size, owner, modified date)
+- Example: {"error": "Permission denied", "file": "/etc/passwd", "message": "Access restricted to root only"}`
+
+	case "XSS", "Cross-Site Scripting":
+		basePrompt += `- Show input validation errors or sanitized output
+- Include fake CSRF tokens, session IDs
+- Add security headers information
+- Example: {"error": "Invalid input detected", "sanitized": true, "security_token": "..."}`
+
+	case "Template Injection", "SSTI":
+		basePrompt += `- Generate fake template rendering output
+- Include template engine errors or processed results
+- Add fake variable names and values
+- Example: {"template": "processed", "output": "...", "variables": {...}}`
+
+	case "Prototype Pollution":
+		basePrompt += `- Show object property manipulation results
+- Include fake prototype chain info
+- Add JavaScript object structures
+- Example: {"object": {...}, "prototype": {...}, "properties": [...]}`
+
+	case "Command Injection", "RCE":
+		basePrompt += `- Generate fake command execution results
+- Include realistic command output, exit codes
+- Add fake process IDs, timestamps
+- Example: {"output": "command executed", "exit_code": 0, "pid": 1234, "user": "www-data"}`
+
+	case "XXE", "XML External Entity":
+		basePrompt += `- Show XML parsing errors or fake parsed content
+- Include DTD validation messages
+- Add fake entity resolution info
+- Example: {"error": "External entity not allowed", "parser": "libxml2", "line": 4}`
+
+	case "Reconnaissance", "Directory Traversal":
+		basePrompt += `- Generate 404 errors or minimal fake directory listings
+- Include fake server info (version, OS)
+- Add misleading paths and files
+- Example: {"error": "Not Found", "path": "...", "suggestions": [...]}`
+
+	default:
+		basePrompt += `- Generate a generic but convincing error or success response
+- Include realistic status messages and metadata
+- Add timestamps and request IDs
+- Example: {"status": "error", "message": "Request failed", "code": 400}`
+	}
+
+	basePrompt += `
+
+OUTPUT FORMAT:
+Return ONLY valid JSON. No markdown, no explanations, no code blocks. Just the JSON payload.
+
+Generate the deception payload now:`
+
+	return fmt.Sprintf(basePrompt, attackType, path, method)
+}
+
+func (gp *GeminiProvider) getFallbackPayload(attackType string) map[string]interface{} {
 	payload := map[string]interface{}{
 		"status":    "success",
 		"message":   "Request processed",
 		"data":      map[string]interface{}{},
-		"timestamp": getCurrentTimestamp(),
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
 	}
 
-	// Add attack-specific responses
 	switch attackType {
-	case "sql_injection":
+	case "SQL Injection":
 		payload = map[string]interface{}{
-			"error": "Invalid query",
+			"error": "You have an error in your SQL syntax",
 			"code":  1064,
+			"query": "SELECT * FROM users WHERE id = '1'",
 		}
-	case "xss":
+	case "XSS", "Cross-Site Scripting":
 		payload = map[string]interface{}{
 			"error":   "Invalid input",
 			"message": "XSS prevention enabled",
+			"token":   fmt.Sprintf("csrf_%x", time.Now().UnixNano()),
 		}
-	case "path_traversal":
+	case "Local File Inclusion", "Path Traversal":
 		payload = map[string]interface{}{
-			"error":   "Access denied",
-			"message": "Path traversal detected",
+			"error":   "Permission denied",
+			"file":    "/etc/passwd",
+			"message": "Access restricted",
 		}
-	case "reconnaissance":
+	case "Template Injection":
 		payload = map[string]interface{}{
-			"error": "Not found",
+			"error":    "Template rendering failed",
+			"template": "user_profile.html",
+			"line":     12,
+		}
+	case "Prototype Pollution":
+		payload = map[string]interface{}{
+			"status": "updated",
+			"object": map[string]interface{}{
+				"constructor": "Object",
+				"__proto__":   map[string]interface{}{},
+			},
+		}
+	case "Reconnaissance":
+		payload = map[string]interface{}{
+			"error":  "Not found",
+			"status": 404,
 		}
 	}
 
-	return payload, nil
+	return payload
 }
 
-// GeneratePayloadWithIntel creates payload with intel collection tracking
 func (gp *GeminiProvider) GeneratePayloadWithIntel(attackType string, intelTemplateID int) (map[string]interface{}, error) {
-	// Get base payload
 	basePayload, err := gp.GeneratePayload(attackType)
 	if err != nil {
 		return nil, err
 	}
 
-	// If no intel templates configured, return base payload
 	if len(gp.intelTemplates) == 0 {
 		return basePayload, nil
 	}
 
-	// Find the intel template to inject
 	var selectedTemplate map[string]interface{}
 	if intelTemplateID > 0 && intelTemplateID <= len(gp.intelTemplates) {
 		selectedTemplate = gp.intelTemplates[intelTemplateID-1]
@@ -231,18 +397,16 @@ func (gp *GeminiProvider) GeneratePayloadWithIntel(attackType string, intelTempl
 		return basePayload, nil
 	}
 
-	// Create enhanced payload with intel collection
 	enhancedPayload := map[string]interface{}{
 		"status":  "ok",
 		"message": "Request processed successfully",
 		"data":    basePayload,
 		"meta": map[string]interface{}{
-			"timestamp": getCurrentTimestamp(),
+			"timestamp": time.Now().UTC().Format(time.RFC3339),
 			"intel_id":  intelTemplateID,
 		},
 	}
 
-	// For HTML/JavaScript responses, inject tracking
 	if templateType, ok := selectedTemplate["template_type"].(string); ok && templateType == "javascript" {
 		if content, ok := selectedTemplate["content"].(string); ok {
 			enhancedPayload["_tracking"] = content

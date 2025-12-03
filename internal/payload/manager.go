@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/0tSystemsPublicRepos/ifrit/internal/config"
 	"github.com/0tSystemsPublicRepos/ifrit/internal/database"
@@ -16,6 +17,7 @@ type AttackerContext struct {
 	AttackType     string
 	Classification string
 	Path           string
+	Method         string // Add method field
 }
 
 type PayloadResponse struct {
@@ -71,6 +73,8 @@ func (pm *PayloadManager) GetPayloadForAttack(ctx AttackerContext, cfg *config.P
 		if err == nil && payload != nil {
 			logging.Info("[PAYLOAD] Using cached payload from DB for: %s", ctx.AttackType)
 			return payload, nil
+		} else {
+			logging.Debug("[PAYLOAD] No payload template found in DB for: %s", ctx.AttackType)
 		}
 	}
 
@@ -81,14 +85,13 @@ func (pm *PayloadManager) GetPayloadForAttack(ctx AttackerContext, cfg *config.P
 		if err == nil && payload != nil {
 			return payload, nil
 		}
+		logging.Error("[PAYLOAD] LLM payload generation failed: %v", err)
 	}
 
 	// 3. Fall back to default responses
 	logging.Info("[PAYLOAD] Using default response for: %s", ctx.AttackType)
 	return pm.getDefaultPayload(ctx.AttackType, cfg), nil
 }
-
-
 
 // getPayloadFromDB retrieves payload template from database
 func (pm *PayloadManager) getPayloadFromDB(attackType string) (*PayloadResponse, error) {
@@ -109,7 +112,6 @@ func (pm *PayloadManager) getPayloadFromDB(attackType string) (*PayloadResponse,
 		StatusCode:  statusCode,
 	}, nil
 }
-
 
 // generateLLMPayload generates payload via LLM with intel injection
 func (pm *PayloadManager) generateLLMPayload(ctx AttackerContext, cfg *config.PayloadManagement, llmManager *llm.Manager) (*PayloadResponse, error) {
@@ -134,9 +136,10 @@ func (pm *PayloadManager) generateLLMPayload(ctx AttackerContext, cfg *config.Pa
 			intelTemplateID = 1
 		}
 
-		payloadData, err := claudeProvider.GeneratePayloadWithIntel(ctx.AttackType, intelTemplateID)
+		// Use the enhanced method with context
+		payloadData, err := pm.generateClaudePayloadWithContext(claudeProvider, ctx, intelTemplateID)
 		if err != nil {
-			logging.Error("[PAYLOAD] Error generating LLM payload: %v", err)
+			logging.Error("[PAYLOAD] Error generating Claude payload: %v", err)
 			return nil, err
 		}
 
@@ -173,7 +176,7 @@ func (pm *PayloadManager) generateLLMPayload(ctx AttackerContext, cfg *config.Pa
 
 		payloadData, err := geminiProvider.GeneratePayloadWithIntel(ctx.AttackType, intelTemplateID)
 		if err != nil {
-			logging.Error("[PAYLOAD] Error generating LLM payload: %v", err)
+			logging.Error("[PAYLOAD] Error generating Gemini payload: %v", err)
 			return nil, err
 		}
 
@@ -194,6 +197,29 @@ func (pm *PayloadManager) generateLLMPayload(ctx AttackerContext, cfg *config.Pa
 	}
 
 	return nil, fmt.Errorf("unsupported LLM provider type")
+}
+
+// generateClaudePayloadWithContext calls Claude with full request context
+func (pm *PayloadManager) generateClaudePayloadWithContext(claudeProvider *llm.ClaudeProvider, ctx AttackerContext, intelTemplateID int) (map[string]interface{}, error) {
+	// Call GeneratePayloadWithContext if it exists, otherwise fall back
+	if method, ok := interface{}(claudeProvider).(interface {
+		GeneratePayloadWithContext(string, string, string) (map[string]interface{}, error)
+	}); ok {
+		basePayload, err := method.GeneratePayloadWithContext(ctx.AttackType, ctx.Path, ctx.Method)
+		if err != nil {
+			return nil, err
+		}
+
+		// Add intel tracking if configured
+		if len(claudeProvider.GetIntelTemplates()) > 0 {
+			return claudeProvider.GeneratePayloadWithIntel(ctx.AttackType, intelTemplateID)
+		}
+
+		return basePayload, nil
+	}
+
+	// Fallback to original method
+	return claudeProvider.GeneratePayloadWithIntel(ctx.AttackType, intelTemplateID)
 }
 
 // getDefaultPayload returns default payload for attack type
@@ -246,10 +272,9 @@ func (pm *PayloadManager) getIntelTemplates() ([]map[string]interface{}, error) 
 
 // cachePayloadToDB stores generated payload in database for future use
 func (pm *PayloadManager) cachePayloadToDB(attackType, payloadJSON string) error {
-	name := fmt.Sprintf("dynamic_%s_%d", attackType, getCurrentUnixTimestamp())
+	name := fmt.Sprintf("dynamic_%s_%d", attackType, time.Now().Unix())
 	return pm.db.CachePayloadTemplate(name, attackType, payloadJSON)
 }
-
 
 // GetCacheStats returns cache statistics
 func (pm *PayloadManager) GetCacheStats() map[string]interface{} {
@@ -260,9 +285,4 @@ func (pm *PayloadManager) GetCacheStats() map[string]interface{} {
 		"active_llm_payloads":   activeLLMPayloads,
 		"intel_injection_ready": true,
 	}
-}
-
-
-func getCurrentUnixTimestamp() int64 {
-	return 1730976294 // Nov 7, 2025
 }

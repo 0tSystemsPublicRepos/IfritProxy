@@ -298,14 +298,16 @@ func main() {
 
 			// Return honeypot response
 			payloadResp, err := payloadManager.GetPayloadForAttack(
-				payload.AttackerContext{
-					SourceIP:       clientIP,
-					AttackType:     "blocked_by_allowlist",
-					Classification: "allowlist_violation",
-					Path:           r.URL.Path,
-				},
-				&cfg.PayloadManagement,
-				llmManager,
+			    payload.AttackerContext{
+			        SourceIP:       clientIP,
+			        AttackType:     "blocked_by_allowlist",
+			        Classification: "allowlist_violation",
+			        Path:           r.URL.Path,
+			        Method:         r.Method,  
+			    },
+			    &cfg.PayloadManagement,
+			    llmManager,
+				
 			)
 			if err != nil || payloadResp == nil {
 				w.WriteHeader(http.StatusForbidden)
@@ -355,16 +357,18 @@ func main() {
 					Timestamp:   time.Now(),
 				})
 
-				// Get payload response
-				payloadResp, err := payloadManager.GetPayloadForAttack(
+					// Get payload response
+					payloadResp, err := payloadManager.GetPayloadForAttack(
 					payload.AttackerContext{
-						SourceIP:       clientIP,
-						AttackType:     result.AttackType,
-						Classification: result.Classification,
-						Path:           r.URL.Path,
-					},
-					&cfg.PayloadManagement,
-					llmManager,
+					SourceIP:       clientIP,
+				        AttackType:     result.AttackType,
+				        Classification: result.Classification,
+				        Path:           r.URL.Path,
+				        Method:         r.Method,  
+				    },
+					    &cfg.PayloadManagement,
+					    llmManager,
+				
 				)
 				if err != nil || payloadResp == nil {
 					w.WriteHeader(http.StatusInternalServerError)
@@ -416,14 +420,15 @@ func main() {
 
 				// Get payload response
 				payloadResp, err := payloadManager.GetPayloadForAttack(
-					payload.AttackerContext{
-						SourceIP:       clientIP,
-						AttackType:     result.AttackType,
-						Classification: result.Classification,
-						Path:           r.URL.Path,
-					},
-					&cfg.PayloadManagement,
-					llmManager,
+				payload.AttackerContext{
+			        SourceIP:       clientIP,
+			        AttackType:     result.AttackType,
+			        Classification: result.Classification,
+			        Path:           r.URL.Path,
+			        Method:         r.Method,  
+			    },
+			    &cfg.PayloadManagement,
+			    llmManager,				
 				)
 				if err != nil || payloadResp == nil {
 					w.WriteHeader(http.StatusInternalServerError)
@@ -501,14 +506,15 @@ func main() {
 
 				// Get payload response
 				payloadResp, err := payloadManager.GetPayloadForAttack(
-					payload.AttackerContext{
-						SourceIP:       clientIP,
-						AttackType:     result.AttackType,
-						Classification: result.Classification,
-						Path:           r.URL.Path,
-					},
-					&cfg.PayloadManagement,
-					llmManager,
+				        payload.AttackerContext{
+				        SourceIP:       clientIP,
+				        AttackType:     result.AttackType,
+				        Classification: result.Classification,
+				        Path:           r.URL.Path,
+				        Method:         r.Method,  
+				    },
+				    &cfg.PayloadManagement,
+				    llmManager,				
 				)
 				if cfg.System.Debug {
 					log.Printf("[DEBUG STAGE4] payloadResp=%+v, err=%v", payloadResp, err)
