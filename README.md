@@ -740,20 +740,6 @@ The IFRIT dashboard provides real-time visibility into your security posture wit
 - **📈 Attack Trends** - 24-hour attack type breakdown with visual bars
 - **🌍 Geographic Insights** - Attack source locations with flags
 
-**Key Metrics Displayed:**
- 
-</br>
-<div align="center">
-  <img src="assets/tables.png" alt="Intelligence Enrichment Pipeline" width="650">
-</div>
-</br>
-
-<div align="center">
-
-</div>
-
-> **💡 Pro Tip:** Generate your API token in `config/default.json` to access the dashboard
-
 
 ### ⌨️ CLI Management
 
