@@ -4,6 +4,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2025-01-27
+
+### Added
+- **Configurable Cookie Domain Rewriting** - Cross-subdomain authentication support
+  - New `cookie_options` configuration in `ServerConfig`
+  - `rewrite_domain` flag to enable/disable cookie domain rewriting
+  - `domain` field to specify the domain (e.g., `.example.com`)
+  - Automatic `Domain` attribute injection for `Set-Cookie` headers
+  - Comprehensive documentation in `docs/COOKIE_DOMAIN_REWRITING.md`
+  - Use case: Share authentication cookies across multiple subdomains
+
+### Changed
+- **Configuration Structure** - Improved JSON organization
+  - Moved `apps` configuration to top level (was nested in `server`)
+  - Added `tls` section to `server` configuration
+  - Added `cookie_options` section to `server` configuration
+  - Enhanced `copyResponse()` function to accept configuration parameter
+
+### Fixed
+- Configuration file structure (apps now properly at root level)
+- Cookie handling for multi-subdomain deployments
+
+### Configuration Example
+```json
+{
+  "server": {
+    "listen_addr": ":8080",
+    "cookie_options": {
+      "rewrite_domain": true,
+      "domain": ".example.com"
+    }
+  },
+  "apps": {
+    "app1": { "proxy_target": "http://localhost:3000", "enabled": true }
+  }
+}
+```
+
+### Testing
+- Cookie domain rewriting (verified with test backend)
+- Attack detection pipeline (12 attack types)
+- LLM payload generation (all attack types)
+- Backward compatibility (disabled by default)
+
+---
+
 
 ## [0.3.0] - 2025-12-01
 
