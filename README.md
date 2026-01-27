@@ -133,12 +133,12 @@ graph TB
 **macOS (Apple Silicon)**
 
 ```bash
-curl -LO https://github.com/0tSystemsPublicRepos/\
-IfritProxy/releases/download/v0.3.1/\
-ifrit-v0.3.1-darwin-arm64.tar.gz
+curl -L -o ifrit-v0.3.2-darwin-arm64.tar.gz \
+  https://github.com/0tSystemsPublicRepos/IfritProxy/releases/download/v0.3.2/ifrit-v0.3.2-darwin-arm64.tar.gz
 
-tar -xzf ifrit-v0.3.1-darwin-arm64.tar.gz
-cd ifrit-v0.3.1-darwin-arm64
+
+tar -xzf ifrit-v0.3.2-darwin-arm64.tar.gz
+cd ifrit-v0.3.2-darwin-arm64
 ./install.sh
 ```
 
@@ -149,11 +149,11 @@ cd ifrit-v0.3.1-darwin-arm64
 
 ```bash
 curl -LO https://github.com/0tSystemsPublicRepos/\
-IfritProxy/releases/download/v0.3.1/\
-ifrit-v0.3.1-linux-amd64.tar.gz
+IfritProxy/releases/download/v0.3.2/\
+ifrit-v0.3.2-linux-amd64.tar.gz
 
-tar -xzf ifrit-v0.3.1-linux-amd64.tar.gz
-cd ifrit-v0.3.1-linux-amd64
+tar -xzf ifrit-v0.3.2-linux-amd64.tar.gz
+cd ifrit-v0.3.2-linux-amd64
 ./install.sh
 ```
 
